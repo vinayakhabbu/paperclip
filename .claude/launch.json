@@ -7,7 +7,7 @@
       "runtimeExecutable": "sh",
       "runtimeArgs": [
         "-c",
-        "cd /Users/vinayakhabbu/projects/paperclip/paperclip && exec pnpm paperclipai run"
+        "cd /Users/vinayakhabbu/projects/paperclip && exec pnpm paperclipai run"
       ],
       "port": 3100
     },
@@ -17,7 +17,7 @@
       "runtimeExecutable": "sh",
       "runtimeArgs": [
         "-c",
-        "cd /Users/vinayakhabbu/projects/paperclip/paperclip && exec pnpm dev"
+        "cd /Users/vinayakhabbu/projects/paperclip && exec pnpm dev"
       ],
       "port": 3100
     },
@@ -27,7 +27,7 @@
       "runtimeExecutable": "sh",
       "runtimeArgs": [
         "-c",
-        "cd /Users/vinayakhabbu/projects/paperclip/paperclip && exec pnpm dev --bind lan"
+        "cd /Users/vinayakhabbu/projects/paperclip && exec pnpm dev --bind lan"
       ],
       "port": 3100
     }
