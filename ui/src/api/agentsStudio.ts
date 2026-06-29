@@ -42,4 +42,10 @@ export const agentsStudioApi = {
 
   run: (companyId: string, id: string, trigger = "manual") =>
     api.post<{ run: AgentWorkflowRun }>(`/companies/${companyId}/workflows/${id}/run`, { trigger }),
+
+  provisionOrg: (companyId: string) =>
+    api.post<{ created: { key: string; id: string; name: string }[]; createdCount: number; skippedCount: number; totalMembers: number }>(
+      `/companies/${companyId}/agents-studio/provision-org`,
+      {},
+    ),
 };

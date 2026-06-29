@@ -51,6 +51,8 @@ export {
   getConnectorAction,
   isValidConnectorAction,
   getWorkflowTemplate,
+  AI_FACTORY_ORG_TEMPLATE,
+  type AiFactoryOrgMember,
   workflowConnectorSchema,
   workflowStepSchema,
   workflowCreateSchema,

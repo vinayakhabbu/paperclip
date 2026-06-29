@@ -537,3 +537,88 @@ const TEMPLATE_BY_KEY = new Map(WORKFLOW_TEMPLATES.map((t) => [t.key, t]));
 export function getWorkflowTemplate(key: string): WorkflowTemplate | undefined {
   return TEMPLATE_BY_KEY.get(key);
 }
+
+// ---------------------------------------------------------------------------
+// AI Factory org template — the agents that staff the factory and use the
+// Agents Studio to build/run workflows across the connector domains.
+// ---------------------------------------------------------------------------
+
+export interface AiFactoryOrgMember {
+  /** Stable key for idempotent provisioning + parent references. */
+  key: string;
+  name: string;
+  /** One of AGENT_ROLES (closest fit; titles carry the real specialization). */
+  role: string;
+  title: string;
+  /** Parent member key, or null for the factory root. */
+  reportsToKey: string | null;
+  /** Connector this agent specializes in (drives workflow assignment), if any. */
+  connector: WorkflowConnector | null;
+  capabilities: string;
+}
+
+export const AI_FACTORY_ORG_TEMPLATE: AiFactoryOrgMember[] = [
+  {
+    key: "director",
+    name: "AI Factory Director",
+    role: "ceo",
+    title: "AI Factory Director",
+    reportsToKey: null,
+    connector: null,
+    capabilities: "Owns the AI factory; sets priorities and oversees workflow delivery across all domains.",
+  },
+  {
+    key: "workflow-architect",
+    name: "Workflow Architect",
+    role: "pm",
+    title: "Agent Workflow Architect",
+    reportsToKey: "director",
+    connector: "core",
+    capabilities: "Designs and maintains agent workflows in Agents Studio; turns requests into deployable blueprints.",
+  },
+  {
+    key: "it-lead",
+    name: "IT Operations Lead",
+    role: "devops",
+    title: "IT / ServiceNow Operations",
+    reportsToKey: "director",
+    connector: "it",
+    capabilities: "Runs IT service workflows: tickets, access provisioning, account resets.",
+  },
+  {
+    key: "hr-lead",
+    name: "HR Operations Lead",
+    role: "general",
+    title: "HR / Workday Operations",
+    reportsToKey: "director",
+    connector: "hr",
+    capabilities: "Runs HR workflows: onboarding, offboarding, time-off, Workday actions.",
+  },
+  {
+    key: "finance-lead",
+    name: "Finance Operations Lead",
+    role: "cfo",
+    title: "Finance / SAP Operations",
+    reportsToKey: "director",
+    connector: "finance",
+    capabilities: "Runs finance workflows: expenses, invoice approvals, budget checks, SAP postings.",
+  },
+  {
+    key: "procurement-lead",
+    name: "Procurement Lead",
+    role: "general",
+    title: "Procurement / SAP Operations",
+    reportsToKey: "director",
+    connector: "procurement",
+    capabilities: "Runs procurement workflows: requisitions, vendor evaluation, SAP purchase orders.",
+  },
+  {
+    key: "integrations-engineer",
+    name: "Integrations Engineer",
+    role: "engineer",
+    title: "SAP · Workday · Jira Integrations",
+    reportsToKey: "director",
+    connector: "jira",
+    capabilities: "Builds and maintains the SAP, Workday, and Jira connector integrations the workflows call.",
+  },
+];

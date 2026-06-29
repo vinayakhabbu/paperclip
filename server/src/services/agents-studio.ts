@@ -1,7 +1,8 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agentWorkflowRuns, agentWorkflows } from "@paperclipai/db";
+import { agentWorkflowRuns, agentWorkflows, agents } from "@paperclipai/db";
 import {
+  AI_FACTORY_ORG_TEMPLATE,
   getConnectorAction,
   getWorkflowTemplate,
   type WorkflowStep,
@@ -118,6 +119,63 @@ export function agentsStudioService(db: Db) {
         })
         .returning()
         .then((rows) => rows[0]!);
+    },
+
+    /**
+     * Idempotently provision the AI Factory agent org for a company. Each
+     * template member is tagged with metadata.factoryKey so re-running only
+     * creates the members that are missing. The factory root attaches under an
+     * existing company root agent if there is one, otherwise becomes a root.
+     */
+    async provisionOrg(companyId: string) {
+      const existing = await db.select().from(agents).where(eq(agents.companyId, companyId));
+      const byFactoryKey = new Map<string, (typeof existing)[number]>();
+      for (const a of existing) {
+        const key = (a.metadata as Record<string, unknown> | null)?.factoryKey;
+        if (typeof key === "string") byFactoryKey.set(key, a);
+      }
+
+      // Attach the factory under an existing root (reportsTo === null) if present.
+      const existingRoot = existing.find((a) => a.reportsTo === null) ?? null;
+
+      const created: { key: string; id: string; name: string }[] = [];
+      const idByKey = new Map<string, string>();
+      for (const [key, agent] of byFactoryKey) idByKey.set(key, agent.id);
+
+      // Insert in template order so parents exist before children.
+      for (const member of AI_FACTORY_ORG_TEMPLATE) {
+        if (byFactoryKey.has(member.key)) {
+          idByKey.set(member.key, byFactoryKey.get(member.key)!.id);
+          continue;
+        }
+        const reportsTo = member.reportsToKey
+          ? idByKey.get(member.reportsToKey) ?? null
+          : existingRoot?.id ?? null;
+        const inserted = await db
+          .insert(agents)
+          .values({
+            companyId,
+            name: member.name,
+            role: member.role,
+            title: member.title,
+            reportsTo,
+            capabilities: member.capabilities,
+            adapterType: "claude_local",
+            status: "idle",
+            metadata: { factoryKey: member.key, aiFactory: true, connector: member.connector },
+          })
+          .returning()
+          .then((rows) => rows[0]!);
+        idByKey.set(member.key, inserted.id);
+        created.push({ key: member.key, id: inserted.id, name: inserted.name });
+      }
+
+      return {
+        created,
+        createdCount: created.length,
+        skippedCount: AI_FACTORY_ORG_TEMPLATE.length - created.length,
+        totalMembers: AI_FACTORY_ORG_TEMPLATE.length,
+      };
     },
 
     listRuns: (companyId: string, workflowId: string) =>

@@ -119,6 +119,21 @@ export function AgentsStudio() {
     onError: (e: Error) => pushToast({ title: "Run failed", body: e.message, tone: "error" }),
   });
 
+  const provisionOrgMutation = useMutation({
+    mutationFn: () => agentsStudioApi.provisionOrg(selectedCompanyId!),
+    onSuccess: (res) => {
+      pushToast({
+        title:
+          res.createdCount > 0
+            ? `AI Factory org ready — ${res.createdCount} agent(s) added`
+            : "AI Factory org already set up",
+        tone: "success",
+      });
+      queryClient.invalidateQueries({ queryKey: queryKeys.agents.list(selectedCompanyId!) });
+    },
+    onError: (e: Error) => pushToast({ title: "Could not set up org", body: e.message, tone: "error" }),
+  });
+
   const removeMutation = useMutation({
     mutationFn: (id: string) => agentsStudioApi.remove(selectedCompanyId!, id),
     onSuccess: () => {
@@ -134,18 +149,30 @@ export function AgentsStudio() {
 
   return (
     <div className="space-y-8">
-      <header className="space-y-1">
-        <div className="flex items-center gap-2">
-          <Factory className="h-5 w-5 text-primary" />
-          <h1 className="text-lg font-semibold">Agents Studio</h1>
-          <Badge variant="outline" className="ml-1">
-            AI Factory
-          </Badge>
+      <header className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <Factory className="h-5 w-5 text-primary" />
+            <h1 className="text-lg font-semibold">Agents Studio</h1>
+            <Badge variant="outline" className="ml-1">
+              AI Factory
+            </Badge>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Compose AI agent workflows across IT, HR, Finance, Procurement, SAP, Workday, and Jira — deploy a
+            starter blueprint or build your own, then run it.
+          </p>
         </div>
-        <p className="text-sm text-muted-foreground">
-          Compose AI agent workflows across IT, HR, Finance, Procurement, SAP, Workday, and Jira — deploy a
-          starter blueprint or build your own, then run it.
-        </p>
+        <Button
+          size="sm"
+          variant="outline"
+          className="shrink-0"
+          disabled={provisionOrgMutation.isPending}
+          onClick={() => provisionOrgMutation.mutate()}
+        >
+          <Users className="mr-1.5 h-3.5 w-3.5" />
+          {provisionOrgMutation.isPending ? "Setting up…" : "Set up AI Factory org"}
+        </Button>
       </header>
 
       {/* Template gallery */}

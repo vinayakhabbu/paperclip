@@ -31,6 +31,13 @@ export function agentsStudioRoutes(db: Db) {
     res.json({ templates: WORKFLOW_TEMPLATES });
   });
 
+  router.post("/companies/:companyId/agents-studio/provision-org", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const result = await svc.provisionOrg(companyId);
+    res.status(201).json(result);
+  });
+
   router.get("/companies/:companyId/workflows", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
