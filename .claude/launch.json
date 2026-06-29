@@ -1,0 +1,35 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "paperclip",
+      "autoPort": false,
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/vinayakhabbu/projects/paperclip/paperclip && exec pnpm paperclipai run"
+      ],
+      "port": 3100
+    },
+    {
+      "name": "paperclip-dev",
+      "autoPort": false,
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/vinayakhabbu/projects/paperclip/paperclip && exec pnpm dev"
+      ],
+      "port": 3100
+    },
+    {
+      "name": "paperclip-host",
+      "autoPort": false,
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/vinayakhabbu/projects/paperclip/paperclip && exec pnpm dev --bind lan"
+      ],
+      "port": 3100
+    }
+  ]
+}
