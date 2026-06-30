@@ -12,7 +12,6 @@ import {
   Repeat,
   Factory,
   Plug,
-  Workflow,
   GitBranch,
   Package,
   Settings,
@@ -178,8 +177,7 @@ export function Sidebar() {
         <SidebarSection label="Work">
           <SidebarNavItem to="/issues" label="Tasks" icon={CircleDot} />
           <SidebarNavItem to="/routines" label="Routines" icon={Repeat} />
-          <SidebarNavItem to="/factory" label="AI Factory" icon={Factory} />
-          <SidebarNavItem to="/agents-studio" label="Agents Studio" icon={Workflow} />
+          <SidebarNavItem to="/agents-studio" label="Agents Studio" icon={Factory} />
           <SidebarNavItem to="/integrators" label="Integrators" icon={Plug} />
           <SidebarNavItem to="/goals" label="Goals" icon={Target} />
           <SidebarNavItem to="/artifacts" label="Artifacts" icon={Package} />

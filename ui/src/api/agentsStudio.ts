@@ -5,8 +5,6 @@ import type {
   ConnectorDefinition,
   FactoryAgentCreateInput,
   FactoryAgentSummary,
-  FactoryOrder,
-  FactoryOrderCreateInput,
   WorkflowCreateInput,
   WorkflowStep,
   WorkflowTemplate,
@@ -47,18 +45,6 @@ export const agentsStudioApi = {
 
   run: (companyId: string, id: string, trigger = "manual") =>
     api.post<{ run: AgentWorkflowRun }>(`/companies/${companyId}/workflows/${id}/run`, { trigger }),
-
-  listOrders: (companyId: string) =>
-    api.get<{ orders: FactoryOrder[] }>(`/companies/${companyId}/factory/orders`),
-
-  createOrder: (companyId: string, data: FactoryOrderCreateInput) =>
-    api.post<{ order: FactoryOrder }>(`/companies/${companyId}/factory/orders`, data),
-
-  advanceOrder: (companyId: string, id: string) =>
-    api.post<{ order: FactoryOrder }>(`/companies/${companyId}/factory/orders/${id}/advance`, {}),
-
-  deleteOrder: (companyId: string, id: string) =>
-    api.delete<{ ok: true }>(`/companies/${companyId}/factory/orders/${id}`),
 
   listAgents: (companyId: string) =>
     api.get<{ agents: FactoryAgentSummary[] }>(`/companies/${companyId}/agents-studio/agents`),

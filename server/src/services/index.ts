@@ -50,7 +50,6 @@ export { secretService } from "./secrets.js";
 export { routineService } from "./routines.js";
 export { agentsStudioService } from "./agents-studio.js";
 export { integratorsService } from "./integrators.js";
-export { factoryOrdersService } from "./factory-orders.js";
 export { costService } from "./costs.js";
 export { financeService } from "./finance.js";
 export { heartbeatService } from "./heartbeat.js";

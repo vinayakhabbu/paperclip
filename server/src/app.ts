@@ -233,7 +233,7 @@ export async function createApp(
   api.use(issueTreeControlRoutes(db));
   api.use(fileResourceRoutes(db));
   api.use(routineRoutes(db, { pluginWorkerManager: workerManager }));
-  api.use(agentsStudioRoutes(db));
+  api.use(agentsStudioRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(environmentRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(executionWorkspaceRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(goalRoutes(db));

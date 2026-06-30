@@ -5,8 +5,6 @@ import {
   INTEGRATOR_CATALOG,
   WORKFLOW_TEMPLATES,
   factoryAgentCreateSchema,
-  factoryOrderCreateSchema,
-  factoryOrderAdvanceSchema,
   integratorConnectInputSchema,
   workflowCreateSchema,
   workflowUpdateSchema,
@@ -14,15 +12,14 @@ import {
   workflowRunCreateSchema,
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
-import { agentsStudioService, factoryOrdersService, integratorsService } from "../services/index.js";
+import { agentsStudioService, integratorsService } from "../services/index.js";
 import { notFound } from "../errors.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 
-export function agentsStudioRoutes(db: Db) {
+export function agentsStudioRoutes(db: Db, options: { pluginWorkerManager?: unknown } = {}) {
   const router = Router();
   const svc = agentsStudioService(db);
   const integrators = integratorsService(db);
-  const factoryOrders = factoryOrdersService(db);
 
   function actorOf(req: Parameters<typeof getActorInfo>[0]) {
     const info = getActorInfo(req);
@@ -82,46 +79,6 @@ export function agentsStudioRoutes(db: Db) {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     res.json({ workflows: await svc.list(companyId) });
-  });
-
-  // AI SDLC Factory orders — the production pipeline.
-  router.get("/companies/:companyId/factory/orders", async (req, res) => {
-    const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
-    res.json({ orders: await factoryOrders.list(companyId) });
-  });
-
-  router.post(
-    "/companies/:companyId/factory/orders",
-    validate(factoryOrderCreateSchema),
-    async (req, res) => {
-      const companyId = req.params.companyId as string;
-      assertCompanyAccess(req, companyId);
-      const order = await factoryOrders.create(companyId, req.body);
-      res.status(201).json({ order });
-    },
-  );
-
-  router.post(
-    "/companies/:companyId/factory/orders/:id/advance",
-    validate(factoryOrderAdvanceSchema),
-    async (req, res) => {
-      const companyId = req.params.companyId as string;
-      const id = req.params.id as string;
-      assertCompanyAccess(req, companyId);
-      const order = await factoryOrders.advance(companyId, id, req.body);
-      if (!order) throw notFound("Order not found");
-      res.json({ order });
-    },
-  );
-
-  router.delete("/companies/:companyId/factory/orders/:id", async (req, res) => {
-    const companyId = req.params.companyId as string;
-    const id = req.params.id as string;
-    assertCompanyAccess(req, companyId);
-    const removed = await factoryOrders.remove(companyId, id);
-    if (!removed) throw notFound("Order not found");
-    res.json({ ok: true });
   });
 
   // Factory agents — list for step assignment + create new specialized agents.
@@ -206,7 +163,9 @@ export function agentsStudioRoutes(db: Db) {
       const companyId = req.params.companyId as string;
     const id = req.params.id as string;
       assertCompanyAccess(req, companyId);
-      const run = await svc.run(companyId, id, req.body.trigger);
+      const run = await svc.run(companyId, id, req.body.trigger, {
+        pluginWorkerManager: options.pluginWorkerManager,
+      });
       if (!run) throw notFound("Workflow not found");
       res.status(201).json({ run });
     },

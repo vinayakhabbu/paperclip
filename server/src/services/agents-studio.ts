@@ -12,6 +12,25 @@ import {
   type WorkflowCreateInput,
   type WorkflowUpdateInput,
 } from "@paperclipai/shared";
+import { issueService } from "./issues.js";
+import { heartbeatService } from "./heartbeat.js";
+import { queueIssueAssignmentWakeup } from "./issue-assignment-wakeup.js";
+
+/** Build the task body an assigned agent reads to perform a workflow step. */
+function stepIssueBody(step: WorkflowStep): string {
+  const action = getConnectorAction(step.connector, step.action);
+  const lines = [
+    `Workflow step run by the AI Factory.`,
+    ``,
+    `- Integrator: ${step.connector}`,
+    `- Action: ${step.action}${action ? ` (${action.label})` : ""}`,
+  ];
+  if (action?.description) lines.push(`- Goal: ${action.description}`);
+  if (step.config && Object.keys(step.config).length > 0) {
+    lines.push(`- Inputs: ${JSON.stringify(step.config)}`);
+  }
+  return lines.join("\n");
+}
 
 /** Map an agent domain to the closest built-in agent role. */
 const DOMAIN_ROLE: Record<string, string> = {
@@ -30,24 +49,6 @@ function normalizeSteps(steps: WorkflowStep[] | undefined): WorkflowStep[] {
     assigneeAgentId: s.assigneeAgentId ?? null,
     config: s.config ?? {},
   }));
-}
-
-/**
- * Simulated step executor. Each connector action resolves deterministically so a
- * workflow run produces a readable, auditable trace. Real connector adapters
- * (SAP/Workday/Jira API calls) plug in here behind the same interface.
- */
-function executeStep(step: WorkflowStep): WorkflowStepRunResult {
-  const action = getConnectorAction(step.connector, step.action);
-  const label = action?.label ?? step.action;
-  return {
-    stepId: step.id,
-    name: step.name,
-    connector: step.connector,
-    action: step.action,
-    status: "succeeded",
-    detail: `${label} completed${step.assigneeAgentId ? " (agent-assigned)" : ""}.`,
-  };
 }
 
 export function agentsStudioService(db: Db) {
@@ -247,7 +248,18 @@ export function agentsStudioService(db: Db) {
         .where(and(eq(agentWorkflowRuns.companyId, companyId), eq(agentWorkflowRuns.workflowId, workflowId)))
         .orderBy(desc(agentWorkflowRuns.createdAt)),
 
-    async run(companyId: string, workflowId: string, trigger: string) {
+    /**
+     * Run a workflow on the real Paperclip engine. Creates a parent issue plus
+     * one child issue per step (assigned to the step's agent) and wakes each
+     * assignee — the same issue + heartbeat path Routines use. The assigned
+     * agents then execute the work for real via their adapters.
+     */
+    async run(
+      companyId: string,
+      workflowId: string,
+      trigger: string,
+      deps?: { pluginWorkerManager?: unknown },
+    ) {
       const workflow = await db
         .select()
         .from(agentWorkflows)
@@ -255,19 +267,90 @@ export function agentsStudioService(db: Db) {
         .then((rows) => rows[0] ?? null);
       if (!workflow) return null;
 
-      const stepResults = (workflow.steps ?? []).map((step) => executeStep(step));
-      const allOk = stepResults.every((r) => r.status === "succeeded");
+      const issues = issueService(db);
+      const heartbeat = heartbeatService(db, {
+        pluginWorkerManager: deps?.pluginWorkerManager as never,
+      });
 
+      const parent = await issues.create(companyId, {
+        title: `Workflow: ${workflow.name}`,
+        description: `Created by Agents Studio to run the "${workflow.name}" workflow on the AI Factory.`,
+        status: "todo",
+        priority: "medium",
+        originKind: "ai_factory_workflow",
+        originId: workflow.id,
+      });
+
+      const stepResults: WorkflowStepRunResult[] = [];
+      for (const step of workflow.steps ?? []) {
+        let status: WorkflowStepRunResult["status"] = "running";
+        let detail = "";
+        try {
+          // Try assigned create first; fall back to unassigned if the agent
+          // isn't currently work-eligible so the task still lands on the board.
+          let child;
+          try {
+            child = await issues.create(companyId, {
+              parentId: parent.id,
+              title: step.name,
+              description: stepIssueBody(step),
+              status: "todo",
+              priority: "medium",
+              assigneeAgentId: step.assigneeAgentId ?? null,
+              originKind: "ai_factory_workflow_step",
+              originId: workflow.id,
+            });
+          } catch {
+            child = await issues.create(companyId, {
+              parentId: parent.id,
+              title: step.name,
+              description: stepIssueBody(step),
+              status: "todo",
+              priority: "medium",
+              originKind: "ai_factory_workflow_step",
+              originId: workflow.id,
+            });
+          }
+          const ref = (child as { identifier?: string | null }).identifier ?? child.id;
+          if (child.assigneeAgentId) {
+            await queueIssueAssignmentWakeup({
+              heartbeat,
+              issue: { id: child.id, assigneeAgentId: child.assigneeAgentId, status: child.status },
+              reason: "ai_factory_workflow",
+              mutation: "create",
+              contextSource: "agents-studio.run",
+              requestedByActorType: "system",
+            });
+            detail = `Task ${ref} created and assignee woken to execute.`;
+          } else {
+            status = "pending";
+            detail = `Task ${ref} created (unassigned — assign an agent to run it).`;
+          }
+        } catch (err) {
+          status = "failed";
+          detail = `Failed to create task: ${(err as Error).message}`;
+        }
+        stepResults.push({
+          stepId: step.id,
+          name: step.name,
+          connector: step.connector,
+          action: step.action,
+          status,
+          detail,
+        });
+      }
+
+      const anyFailed = stepResults.some((r) => r.status === "failed");
       return db
         .insert(agentWorkflowRuns)
         .values({
           companyId,
           workflowId,
-          status: allOk ? "succeeded" : "failed",
+          status: anyFailed ? "failed" : "running",
           trigger,
           stepResults,
           startedAt: new Date(),
-          finishedAt: new Date(),
+          finishedAt: anyFailed ? new Date() : null,
         })
         .returning()
         .then((rows) => rows[0]!);
