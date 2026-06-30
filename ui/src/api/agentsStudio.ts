@@ -1,7 +1,12 @@
 import type {
   AgentWorkflow,
   AgentWorkflowRun,
+  CompanyIntegrator,
   ConnectorDefinition,
+  FactoryAgentCreateInput,
+  FactoryAgentSummary,
+  FactoryOrder,
+  FactoryOrderCreateInput,
   WorkflowCreateInput,
   WorkflowStep,
   WorkflowTemplate,
@@ -42,6 +47,33 @@ export const agentsStudioApi = {
 
   run: (companyId: string, id: string, trigger = "manual") =>
     api.post<{ run: AgentWorkflowRun }>(`/companies/${companyId}/workflows/${id}/run`, { trigger }),
+
+  listOrders: (companyId: string) =>
+    api.get<{ orders: FactoryOrder[] }>(`/companies/${companyId}/factory/orders`),
+
+  createOrder: (companyId: string, data: FactoryOrderCreateInput) =>
+    api.post<{ order: FactoryOrder }>(`/companies/${companyId}/factory/orders`, data),
+
+  advanceOrder: (companyId: string, id: string) =>
+    api.post<{ order: FactoryOrder }>(`/companies/${companyId}/factory/orders/${id}/advance`, {}),
+
+  deleteOrder: (companyId: string, id: string) =>
+    api.delete<{ ok: true }>(`/companies/${companyId}/factory/orders/${id}`),
+
+  listAgents: (companyId: string) =>
+    api.get<{ agents: FactoryAgentSummary[] }>(`/companies/${companyId}/agents-studio/agents`),
+
+  createAgent: (companyId: string, data: FactoryAgentCreateInput) =>
+    api.post<{ agent: { id: string; name: string } }>(`/companies/${companyId}/agents-studio/agents`, data),
+
+  listIntegrators: (companyId: string) =>
+    api.get<{ integrators: CompanyIntegrator[] }>(`/companies/${companyId}/integrators`),
+
+  connectIntegrator: (companyId: string, key: string, config: Record<string, unknown>) =>
+    api.post<{ integrator: CompanyIntegrator }>(`/companies/${companyId}/integrators/${key}/connect`, { config }),
+
+  disconnectIntegrator: (companyId: string, key: string) =>
+    api.post<{ integrator: CompanyIntegrator }>(`/companies/${companyId}/integrators/${key}/disconnect`, {}),
 
   provisionOrg: (companyId: string) =>
     api.post<{ created: { key: string; id: string; name: string }[]; createdCount: number; skippedCount: number; totalMembers: number }>(

@@ -2,20 +2,27 @@ import { Router } from "express";
 import type { Db } from "@paperclipai/db";
 import {
   CONNECTOR_CATALOG,
+  INTEGRATOR_CATALOG,
   WORKFLOW_TEMPLATES,
+  factoryAgentCreateSchema,
+  factoryOrderCreateSchema,
+  factoryOrderAdvanceSchema,
+  integratorConnectInputSchema,
   workflowCreateSchema,
   workflowUpdateSchema,
   workflowDeployTemplateSchema,
   workflowRunCreateSchema,
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
-import { agentsStudioService } from "../services/index.js";
+import { agentsStudioService, factoryOrdersService, integratorsService } from "../services/index.js";
 import { notFound } from "../errors.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 
 export function agentsStudioRoutes(db: Db) {
   const router = Router();
   const svc = agentsStudioService(db);
+  const integrators = integratorsService(db);
+  const factoryOrders = factoryOrdersService(db);
 
   function actorOf(req: Parameters<typeof getActorInfo>[0]) {
     const info = getActorInfo(req);
@@ -31,6 +38,39 @@ export function agentsStudioRoutes(db: Db) {
     res.json({ templates: WORKFLOW_TEMPLATES });
   });
 
+  router.get("/agents-studio/integrators", (_req, res) => {
+    res.json({ integrators: INTEGRATOR_CATALOG });
+  });
+
+  // Per-company integrator connections.
+  router.get("/companies/:companyId/integrators", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    res.json({ integrators: await integrators.list(companyId) });
+  });
+
+  router.post(
+    "/companies/:companyId/integrators/:integratorKey/connect",
+    validate(integratorConnectInputSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const integratorKey = req.params.integratorKey as string;
+      assertCompanyAccess(req, companyId);
+      const integrator = await integrators.connect(companyId, integratorKey, req.body.config);
+      if (!integrator) throw notFound("Unknown integrator");
+      res.json({ integrator });
+    },
+  );
+
+  router.post("/companies/:companyId/integrators/:integratorKey/disconnect", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    const integratorKey = req.params.integratorKey as string;
+    assertCompanyAccess(req, companyId);
+    const integrator = await integrators.disconnect(companyId, integratorKey);
+    if (!integrator) throw notFound("Unknown integrator");
+    res.json({ integrator });
+  });
+
   router.post("/companies/:companyId/agents-studio/provision-org", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
@@ -43,6 +83,64 @@ export function agentsStudioRoutes(db: Db) {
     assertCompanyAccess(req, companyId);
     res.json({ workflows: await svc.list(companyId) });
   });
+
+  // AI SDLC Factory orders — the production pipeline.
+  router.get("/companies/:companyId/factory/orders", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    res.json({ orders: await factoryOrders.list(companyId) });
+  });
+
+  router.post(
+    "/companies/:companyId/factory/orders",
+    validate(factoryOrderCreateSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const order = await factoryOrders.create(companyId, req.body);
+      res.status(201).json({ order });
+    },
+  );
+
+  router.post(
+    "/companies/:companyId/factory/orders/:id/advance",
+    validate(factoryOrderAdvanceSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const id = req.params.id as string;
+      assertCompanyAccess(req, companyId);
+      const order = await factoryOrders.advance(companyId, id, req.body);
+      if (!order) throw notFound("Order not found");
+      res.json({ order });
+    },
+  );
+
+  router.delete("/companies/:companyId/factory/orders/:id", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    const id = req.params.id as string;
+    assertCompanyAccess(req, companyId);
+    const removed = await factoryOrders.remove(companyId, id);
+    if (!removed) throw notFound("Order not found");
+    res.json({ ok: true });
+  });
+
+  // Factory agents — list for step assignment + create new specialized agents.
+  router.get("/companies/:companyId/agents-studio/agents", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    res.json({ agents: await svc.listFactoryAgents(companyId) });
+  });
+
+  router.post(
+    "/companies/:companyId/agents-studio/agents",
+    validate(factoryAgentCreateSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const agent = await svc.createFactoryAgent(companyId, req.body);
+      res.status(201).json({ agent });
+    },
+  );
 
   router.post("/companies/:companyId/workflows", validate(workflowCreateSchema), async (req, res) => {
     const companyId = req.params.companyId as string;

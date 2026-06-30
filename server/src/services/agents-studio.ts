@@ -5,11 +5,22 @@ import {
   AI_FACTORY_ORG_TEMPLATE,
   getConnectorAction,
   getWorkflowTemplate,
+  type FactoryAgentCreateInput,
+  type FactoryAgentSummary,
   type WorkflowStep,
   type WorkflowStepRunResult,
   type WorkflowCreateInput,
   type WorkflowUpdateInput,
 } from "@paperclipai/shared";
+
+/** Map an agent domain to the closest built-in agent role. */
+const DOMAIN_ROLE: Record<string, string> = {
+  it: "devops",
+  hr: "general",
+  finance: "cfo",
+  procurement: "general",
+  general: "general",
+};
 
 type Actor = { agentId?: string | null; userId?: string | null };
 
@@ -176,6 +187,57 @@ export function agentsStudioService(db: Db) {
         skippedCount: AI_FACTORY_ORG_TEMPLATE.length - created.length,
         totalMembers: AI_FACTORY_ORG_TEMPLATE.length,
       };
+    },
+
+    /** Agents available to assign to workflow steps (factory-built first). */
+    async listFactoryAgents(companyId: string): Promise<FactoryAgentSummary[]> {
+      const rows = await db.select().from(agents).where(eq(agents.companyId, companyId));
+      return rows
+        .map((a) => {
+          const meta = (a.metadata as Record<string, unknown> | null) ?? {};
+          return {
+            id: a.id,
+            name: a.name,
+            title: a.title,
+            role: a.role,
+            domain: typeof meta.domain === "string" ? meta.domain : null,
+            allowedIntegrators: Array.isArray(meta.allowedIntegrators)
+              ? (meta.allowedIntegrators as string[])
+              : [],
+            isFactoryBuilt: meta.aiFactoryAgent === true || meta.aiFactory === true,
+          };
+        })
+        .sort((a, b) => Number(b.isFactoryBuilt) - Number(a.isFactoryBuilt) || a.name.localeCompare(b.name));
+    },
+
+    /** Create a specialized agent in the factory org (Agent Studio "Create Agent"). */
+    async createFactoryAgent(companyId: string, input: FactoryAgentCreateInput) {
+      const existing = await db.select().from(agents).where(eq(agents.companyId, companyId));
+      const director = existing.find(
+        (a) => (a.metadata as Record<string, unknown> | null)?.factoryKey === "director",
+      );
+      const root = existing.find((a) => a.reportsTo === null) ?? null;
+      const reportsTo = director?.id ?? root?.id ?? null;
+      const inserted = await db
+        .insert(agents)
+        .values({
+          companyId,
+          name: input.name,
+          role: DOMAIN_ROLE[input.domain] ?? "general",
+          title: `${input.domain.toUpperCase()} Agent`,
+          reportsTo,
+          capabilities: input.instructions || null,
+          adapterType: "claude_local",
+          status: "idle",
+          metadata: {
+            aiFactoryAgent: true,
+            domain: input.domain,
+            allowedIntegrators: input.allowedIntegrators,
+          },
+        })
+        .returning()
+        .then((rows) => rows[0]!);
+      return inserted;
     },
 
     listRuns: (companyId: string, workflowId: string) =>

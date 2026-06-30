@@ -131,6 +131,9 @@ export const queryKeys = {
     list: (companyId: string) => ["agents-studio", "workflows", companyId] as const,
     detail: (companyId: string, id: string) => ["agents-studio", "workflow", companyId, id] as const,
     runs: (companyId: string, id: string) => ["agents-studio", "runs", companyId, id] as const,
+    integrators: (companyId: string) => ["agents-studio", "integrators", companyId] as const,
+    agents: (companyId: string) => ["agents-studio", "agents", companyId] as const,
+    orders: (companyId: string) => ["agents-studio", "factory-orders", companyId] as const,
   },
   executionWorkspaces: {
     list: (companyId: string, filters?: Record<string, string | boolean | undefined>) =>

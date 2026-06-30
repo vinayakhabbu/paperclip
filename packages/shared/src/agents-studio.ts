@@ -62,6 +62,8 @@ export interface ConnectorAction {
   fields: ConnectorActionField[];
 }
 
+export type IntegratorAuthType = "none" | "api_key" | "oauth2";
+
 export interface ConnectorDefinition {
   key: WorkflowConnector;
   label: string;
@@ -72,6 +74,18 @@ export interface ConnectorDefinition {
   /** Tailwind-ish accent token (UI maps to a class). */
   accent: string;
   actions: ConnectorAction[];
+  /**
+   * Whether this connector represents an external enterprise system (an
+   * "Integrator" in Moveworks terms) that workflows stitch together. `core`
+   * (the agent itself) is not an integrator.
+   */
+  isIntegrator?: boolean;
+  /** Concrete enterprise system this integrator targets, e.g. "ServiceNow". */
+  system?: string;
+  /** How the integrator authenticates when connected to a company. */
+  authType?: IntegratorAuthType;
+  /** Credential/config fields collected on connect (e.g. base URL, API token). */
+  authFields?: ConnectorActionField[];
 }
 
 const f = (
@@ -116,6 +130,10 @@ export const CONNECTOR_CATALOG: ConnectorDefinition[] = [
     description: "IT service management: tickets, access, provisioning.",
     icon: "Server",
     accent: "blue",
+    isIntegrator: true,
+    system: "ServiceNow",
+    authType: "api_key",
+    authFields: [f("baseUrl", "Instance URL", "string", true, "https://acme.service-now.com"), f("apiToken", "API token", "string", true)],
     actions: [
       {
         key: "it.ticket.create",
@@ -147,6 +165,10 @@ export const CONNECTOR_CATALOG: ConnectorDefinition[] = [
     description: "People operations: onboarding, offboarding, records.",
     icon: "Users",
     accent: "rose",
+    isIntegrator: true,
+    system: "BambooHR",
+    authType: "api_key",
+    authFields: [f("subdomain", "Subdomain", "string", true, "acme"), f("apiKey", "API key", "string", true)],
     actions: [
       {
         key: "hr.employee.onboard",
@@ -178,6 +200,10 @@ export const CONNECTOR_CATALOG: ConnectorDefinition[] = [
     description: "Expenses, invoices, approvals, reporting.",
     icon: "DollarSign",
     accent: "emerald",
+    isIntegrator: true,
+    system: "NetSuite",
+    authType: "oauth2",
+    authFields: [f("accountId", "Account ID", "string", true), f("clientId", "Client ID", "string", true), f("clientSecret", "Client secret", "string", true)],
     actions: [
       {
         key: "finance.expense.submit",
@@ -209,6 +235,10 @@ export const CONNECTOR_CATALOG: ConnectorDefinition[] = [
     description: "Requisitions, purchase orders, vendor management.",
     icon: "ShoppingCart",
     accent: "amber",
+    isIntegrator: true,
+    system: "Coupa",
+    authType: "api_key",
+    authFields: [f("baseUrl", "Instance URL", "string", true, "https://acme.coupahost.com"), f("apiKey", "API key", "string", true)],
     actions: [
       {
         key: "procurement.requisition.create",
@@ -234,6 +264,10 @@ export const CONNECTOR_CATALOG: ConnectorDefinition[] = [
     description: "ERP: purchase orders, invoices, materials, status.",
     icon: "Boxes",
     accent: "indigo",
+    isIntegrator: true,
+    system: "SAP S/4HANA",
+    authType: "oauth2",
+    authFields: [f("baseUrl", "API base URL", "string", true, "https://acme.s4hana.cloud.sap"), f("clientId", "Client ID", "string", true), f("clientSecret", "Client secret", "string", true)],
     actions: [
       {
         key: "sap.po.create",
@@ -265,6 +299,10 @@ export const CONNECTOR_CATALOG: ConnectorDefinition[] = [
     description: "HCM: workers, org, time-off, compensation.",
     icon: "CalendarClock",
     accent: "orange",
+    isIntegrator: true,
+    system: "Workday",
+    authType: "oauth2",
+    authFields: [f("tenant", "Tenant", "string", true, "acme"), f("clientId", "Client ID", "string", true), f("clientSecret", "Client secret", "string", true)],
     actions: [
       {
         key: "workday.worker.get",
@@ -292,6 +330,10 @@ export const CONNECTOR_CATALOG: ConnectorDefinition[] = [
     description: "Issue tracking: create, transition, comment.",
     icon: "ClipboardList",
     accent: "sky",
+    isIntegrator: true,
+    system: "Atlassian Jira",
+    authType: "api_key",
+    authFields: [f("baseUrl", "Site URL", "string", true, "https://acme.atlassian.net"), f("email", "Account email", "string", true), f("apiToken", "API token", "string", true)],
     actions: [
       {
         key: "jira.issue.create",
@@ -331,6 +373,60 @@ export function getConnectorAction(connector: string, action: string): Connector
 
 export function isValidConnectorAction(connector: string, action: string): boolean {
   return Boolean(getConnectorAction(connector, action));
+}
+
+/** The connectors that represent external enterprise systems (integrators). */
+export const INTEGRATOR_CATALOG: ConnectorDefinition[] = CONNECTOR_CATALOG.filter((c) => c.isIntegrator);
+
+export function getIntegrator(key: string): ConnectorDefinition | undefined {
+  const c = getConnector(key);
+  return c?.isIntegrator ? c : undefined;
+}
+
+export const INTEGRATOR_CONNECTION_STATUSES = ["available", "connected", "error"] as const;
+export type IntegratorConnectionStatus = (typeof INTEGRATOR_CONNECTION_STATUSES)[number];
+
+/** Per-company integrator state merged with its catalog definition (for the UI). */
+export interface CompanyIntegrator {
+  key: WorkflowConnector;
+  label: string;
+  system: string;
+  description: string;
+  icon: string;
+  accent: string;
+  authType: IntegratorAuthType;
+  authFields: ConnectorActionField[];
+  actionCount: number;
+  status: IntegratorConnectionStatus;
+  config: Record<string, unknown>;
+  connectedAt: string | null;
+}
+
+export const integratorConnectInputSchema = z.object({
+  config: z.record(z.unknown()).default({}),
+});
+
+/** Domains a studio-created agent can specialize in. */
+export const AGENT_DOMAINS = ["it", "hr", "finance", "procurement", "general"] as const;
+export type AgentDomain = (typeof AGENT_DOMAINS)[number];
+
+export const factoryAgentCreateSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  domain: z.enum(AGENT_DOMAINS).default("general"),
+  instructions: z.string().trim().max(4000).default(""),
+  allowedIntegrators: z.array(z.enum(WORKFLOW_CONNECTORS)).max(20).default([]),
+});
+
+export type FactoryAgentCreateInput = z.infer<typeof factoryAgentCreateSchema>;
+
+export interface FactoryAgentSummary {
+  id: string;
+  name: string;
+  title: string | null;
+  role: string;
+  domain: string | null;
+  allowedIntegrators: string[];
+  isFactoryBuilt: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -621,4 +717,71 @@ export const AI_FACTORY_ORG_TEMPLATE: AiFactoryOrgMember[] = [
     connector: "jira",
     capabilities: "Builds and maintains the SAP, Workday, and Jira connector integrations the workflows call.",
   },
+  {
+    key: "qa-engineer",
+    name: "QA Engineer",
+    role: "qa",
+    title: "Workflow QA / Test",
+    reportsToKey: "director",
+    connector: "core",
+    capabilities: "Tests produced agents and workflows before release; runs dry-runs and validates outputs.",
+  },
+  {
+    key: "release-manager",
+    name: "Release Manager",
+    role: "devops",
+    title: "Release / Deploy",
+    reportsToKey: "director",
+    connector: "core",
+    capabilities: "Promotes tested workflows to live and owns the deploy step of the factory pipeline.",
+  },
 ];
+
+// ---------------------------------------------------------------------------
+// AI SDLC Factory pipeline — factory orders move through lifecycle stages and
+// produce a new agent + workflow at the end.
+// ---------------------------------------------------------------------------
+
+export const FACTORY_STAGES = ["intake", "design", "build", "test", "deploy", "live"] as const;
+export type FactoryStage = (typeof FACTORY_STAGES)[number];
+
+export const FACTORY_STAGE_LABELS: Record<FactoryStage, string> = {
+  intake: "Intake",
+  design: "Design",
+  build: "Build",
+  test: "Test",
+  deploy: "Deploy",
+  live: "Live",
+};
+
+/** Returns the next stage in the lifecycle, or null if already live. */
+export function nextFactoryStage(stage: FactoryStage): FactoryStage | null {
+  const i = FACTORY_STAGES.indexOf(stage);
+  return i >= 0 && i < FACTORY_STAGES.length - 1 ? FACTORY_STAGES[i + 1]! : null;
+}
+
+export interface FactoryOrder {
+  id: string;
+  companyId: string;
+  title: string;
+  domain: string;
+  stage: FactoryStage;
+  description: string | null;
+  producedWorkflowId: string | null;
+  producedAgentId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const factoryOrderCreateSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  domain: z.enum(AGENT_DOMAINS).default("general"),
+  description: z.string().trim().max(2000).nullish(),
+});
+
+export const factoryOrderAdvanceSchema = z.object({
+  producedWorkflowId: z.string().uuid().nullish(),
+  producedAgentId: z.string().uuid().nullish(),
+});
+
+export type FactoryOrderCreateInput = z.infer<typeof factoryOrderCreateSchema>;

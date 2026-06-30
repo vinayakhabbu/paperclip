@@ -31,6 +31,7 @@ import {
 } from "@paperclipai/db";
 import detectPort from "detect-port";
 import { createApp } from "./app.js";
+import { autoSeedAiFactory } from "./services/ai-factory-seed.js";
 import { loadConfig } from "./config.js";
 import { logger } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
@@ -666,6 +667,10 @@ export async function startServer(): Promise<StartedServer> {
     resolveSession,
     pluginWorkerManager,
   });
+  // Option A: idempotently provision the AI Factory org + integrators on boot
+  // when PAPERCLIP_AUTOSEED_AI_FACTORY is set (best-effort, never blocks startup).
+  await autoSeedAiFactory(db as any);
+
   const server = createServer(app as unknown as Parameters<typeof createServer>[0]);
 
   // Increase keep-alive timeouts to safely outlive default idle timeouts
