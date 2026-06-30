@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, Plus, Trash2, UserPlus, Workflow as WorkflowIcon, X } from "lucide-react";
 import type { AgentDomain, ConnectorDefinition, WorkflowConnector } from "@paperclipai/shared";
@@ -112,6 +113,38 @@ export function StudioBuilder({ companyId }: { companyId: string }) {
 
   return (
     <section className="grid gap-3 sm:grid-cols-2">
+      {/* Agents — view created + default agents; click through to edit on the detail page */}
+      <div className="rounded-lg border bg-card p-4 shadow-sm sm:col-span-2">
+        <div className="mb-2 flex items-center gap-2">
+          <Bot className="h-4 w-4 text-muted-foreground" />
+          <h3 className="text-sm font-semibold">Agents</h3>
+          <span className="text-xs text-muted-foreground">{agents.length}</span>
+        </div>
+        {agentsQuery.isLoading ? (
+          <p className="text-xs text-muted-foreground">Loading…</p>
+        ) : agents.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No agents yet — create one below or provision the factory org.</p>
+        ) : (
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            {agents.map((a) => (
+              <Link
+                key={a.id}
+                to={`/agents/${a.id}`}
+                className="flex items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 text-sm no-underline hover:bg-accent/40"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate font-medium text-foreground">{a.name}</span>
+                  {a.title ? <span className="block truncate text-[11px] text-muted-foreground">{a.title}</span> : null}
+                </span>
+                <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  {a.isFactoryBuilt ? "Factory" : "Default"}
+                </span>
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Create Agent */}
       <div className="rounded-lg border bg-card p-4 shadow-sm">
         <div className="mb-2 flex items-center justify-between">
