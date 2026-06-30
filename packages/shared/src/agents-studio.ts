@@ -660,6 +660,25 @@ export interface AiFactoryOrgMember {
   capabilities: string;
 }
 
+/** AGENTS.md body for a factory member — derived from its role, no per-agent files. */
+export function factoryAgentInstructions(member: AiFactoryOrgMember): string {
+  const reports = member.reportsToKey ? "AI Factory Director" : "— (top of the AI Factory)";
+  return `# ${member.name}
+
+**Role:** ${member.title ?? member.name}
+**Reports to:** ${reports}
+
+## Mandate
+${member.capabilities}
+
+## How you work
+- You are an agent in the Paperclip **AI Factory**. Work reaches you as **issues** assigned on the board — pick them up, do the work, update status, and attach results as work products.
+- Author and run agent workflows in **Agents Studio** (use the \`agents-studio\` and \`paperclip\` skills).
+- Call connected systems through **integrator tools** (\`GET /companies/:id/integrators/tools\`); credentials are injected server-side, so never handle secrets directly.
+- Stay in your lane: do only what your mandate covers, and hand off to the right teammate (QA before release, Code Reviewer before merge) instead of expanding scope.
+`;
+}
+
 export const AI_FACTORY_ORG_TEMPLATE: AiFactoryOrgMember[] = [
   {
     key: "director",

@@ -3,6 +3,7 @@ import type { Db } from "@paperclipai/db";
 import { agentWorkflowRuns, agentWorkflows, agents } from "@paperclipai/db";
 import {
   AI_FACTORY_ORG_TEMPLATE,
+  factoryAgentInstructions,
   getConnectorAction,
   getWorkflowTemplate,
   type FactoryAgentCreateInput,
@@ -177,8 +178,17 @@ export function agentsStudioService(db: Db) {
 
       // Insert in template order so parents exist before children.
       for (const member of AI_FACTORY_ORG_TEMPLATE) {
-        if (byFactoryKey.has(member.key)) {
-          idByKey.set(member.key, byFactoryKey.get(member.key)!.id);
+        const existingAgent = byFactoryKey.get(member.key);
+        if (existingAgent) {
+          idByKey.set(member.key, existingAgent.id);
+          // Backfill a blank AGENTS.md (promptTemplate) without clobbering edits.
+          const cfg = (existingAgent.adapterConfig as Record<string, unknown> | null) ?? {};
+          if (!String(cfg.promptTemplate ?? "").trim()) {
+            await db
+              .update(agents)
+              .set({ adapterConfig: { ...cfg, promptTemplate: factoryAgentInstructions(member) } })
+              .where(eq(agents.id, existingAgent.id));
+          }
           continue;
         }
         const reportsTo = member.reportsToKey
@@ -195,6 +205,7 @@ export function agentsStudioService(db: Db) {
             capabilities: member.capabilities,
             adapterType: "claude_local",
             status: "idle",
+            adapterConfig: { promptTemplate: factoryAgentInstructions(member) },
             metadata: { factoryKey: member.key, aiFactory: true, connector: member.connector },
           })
           .returning()

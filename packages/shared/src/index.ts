@@ -72,6 +72,7 @@ export {
   factoryAgentCreateSchema,
   getWorkflowTemplate,
   AI_FACTORY_ORG_TEMPLATE,
+  factoryAgentInstructions,
   type AiFactoryOrgMember,
   workflowConnectorSchema,
   workflowStepSchema,
