@@ -15,6 +15,7 @@ import {
 } from "@paperclipai/shared";
 import { issueService } from "./issues.js";
 import { heartbeatService } from "./heartbeat.js";
+import { agentInstructionsService } from "./agent-instructions.js";
 import { integratorsService, type IntegratorAgentTool } from "./integrators.js";
 import { queueIssueAssignmentWakeup } from "./issue-assignment-wakeup.js";
 
@@ -171,6 +172,22 @@ export function agentsStudioService(db: Db) {
 
       // Attach the factory under an existing root (reportsTo === null) if present.
       const existingRoot = existing.find((a) => a.reportsTo === null) ?? null;
+      const instructions = agentInstructionsService();
+
+      // Write the agent's real AGENTS.md bundle file (not the deprecated legacy
+      // promptTemplate) and persist the resulting bundle config. Skips agents
+      // whose AGENTS.md already has content so manual edits survive.
+      async function applyAgentsMd(agentRow: (typeof existing)[number], md: string) {
+        const current = await instructions
+          .readFile(agentRow, "AGENTS.md")
+          .then((f) => f.content)
+          .catch(() => "");
+        if (current.trim().length > 0) return;
+        const { adapterConfig } = await instructions.writeFile(agentRow, "AGENTS.md", md, {
+          clearLegacyPromptTemplate: true,
+        });
+        await db.update(agents).set({ adapterConfig }).where(eq(agents.id, agentRow.id));
+      }
 
       const created: { key: string; id: string; name: string }[] = [];
       const idByKey = new Map<string, string>();
@@ -181,14 +198,7 @@ export function agentsStudioService(db: Db) {
         const existingAgent = byFactoryKey.get(member.key);
         if (existingAgent) {
           idByKey.set(member.key, existingAgent.id);
-          // Backfill a blank AGENTS.md (promptTemplate) without clobbering edits.
-          const cfg = (existingAgent.adapterConfig as Record<string, unknown> | null) ?? {};
-          if (!String(cfg.promptTemplate ?? "").trim()) {
-            await db
-              .update(agents)
-              .set({ adapterConfig: { ...cfg, promptTemplate: factoryAgentInstructions(member) } })
-              .where(eq(agents.id, existingAgent.id));
-          }
+          await applyAgentsMd(existingAgent, factoryAgentInstructions(member));
           continue;
         }
         const reportsTo = member.reportsToKey
@@ -205,13 +215,27 @@ export function agentsStudioService(db: Db) {
             capabilities: member.capabilities,
             adapterType: "claude_local",
             status: "idle",
-            adapterConfig: { promptTemplate: factoryAgentInstructions(member) },
             metadata: { factoryKey: member.key, aiFactory: true, connector: member.connector },
           })
           .returning()
           .then((rows) => rows[0]!);
+        await applyAgentsMd(inserted, factoryAgentInstructions(member));
         idByKey.set(member.key, inserted.id);
         created.push({ key: member.key, id: inserted.id, name: inserted.name });
+      }
+
+      // The pre-existing company root (e.g. CEO) isn't a factory member but the
+      // user wants its AGENTS.md populated too.
+      if (existingRoot) {
+        await applyAgentsMd(existingRoot, factoryAgentInstructions({
+          key: "root",
+          name: existingRoot.name,
+          role: existingRoot.role,
+          title: existingRoot.title ?? existingRoot.name,
+          reportsToKey: null,
+          connector: null,
+          capabilities: existingRoot.capabilities || "Owns the company; sets direction and delegates execution to the AI Factory.",
+        }));
       }
 
       return {
@@ -270,6 +294,16 @@ export function agentsStudioService(db: Db) {
         })
         .returning()
         .then((rows) => rows[0]!);
+      // Seed the agent's AGENTS.md from the provided instructions.
+      if (input.instructions.trim()) {
+        const { adapterConfig } = await agentInstructionsService().writeFile(
+          inserted,
+          "AGENTS.md",
+          input.instructions.trim(),
+          { clearLegacyPromptTemplate: true },
+        );
+        await db.update(agents).set({ adapterConfig }).where(eq(agents.id, inserted.id));
+      }
       return inserted;
     },
 
