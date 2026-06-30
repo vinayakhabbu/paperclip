@@ -754,5 +754,17 @@ export const AI_FACTORY_ORG_TEMPLATE: AiFactoryOrgMember[] = [
     connector: "core",
     capabilities: "Builds and refactors applications end to end; the SDLC build lane of the factory.",
   },
+  // ponytail: code review + security is a quality/security trust boundary — the
+  // one role you never skip. QA tests behavior; this reviews the diff for
+  // correctness and security before Release ships it.
+  {
+    key: "code-reviewer",
+    name: "Code Reviewer",
+    role: "engineer",
+    title: "Code Review / Security",
+    reportsToKey: "director",
+    connector: "core",
+    capabilities: "Reviews produced code for correctness and security before release; the quality gate on the build lane.",
+  },
 ];
 
