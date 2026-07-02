@@ -90,6 +90,7 @@ import {
   FileText,
   Folder,
   FolderOpen,
+  FolderUp,
   GitFork,
   Github,
   Globe,
@@ -3732,6 +3733,8 @@ export function CompanySkills() {
   const [createDraft, setCreateDraft] = useState<SkillCreateDraft>(() => buildBlankSkillDraft());
   const [createError, setCreateError] = useState<string | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [uploadPending, setUploadPending] = useState(false);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
   const parsedRoute = useMemo(() => parseSkillRoute(routePath), [routePath]);
   const routeSkillToken = parsedRoute.skillToken;
   const selectedPath = parsedRoute.filePath;
@@ -4427,6 +4430,55 @@ export function CompanySkills() {
     importSkill.mutate(trimmedSource);
   }
 
+  async function handleUploadFolder(fileList: FileList) {
+    if (!selectedCompanyId) return;
+    setUploadPending(true);
+    try {
+      const files: Array<{ path: string; content: string }> = [];
+      let skillMd: string | null = null;
+      let folderName = "skill";
+      for (const file of Array.from(fileList)) {
+        // webkitRelativePath is "folder/sub/file"; strip the top folder.
+        const segments = (file.webkitRelativePath || file.name).split("/");
+        folderName = segments.length > 1 ? segments[0] : folderName;
+        const rel = segments.length > 1 ? segments.slice(1).join("/") : segments[0];
+        if (rel.split("/").some((s) => s.startsWith(".") || s === "node_modules" || s === "__pycache__")) continue;
+        if (file.size > 1_000_000) continue;
+        const content = await file.text();
+        // ponytail: text files only; binary assets need a storage-backed upload path
+        if (content.includes("\u0000")) continue;
+        if (rel === "SKILL.md") skillMd = content;
+        else files.push({ path: rel, content });
+      }
+      if (!skillMd) {
+        pushToast({ tone: "error", title: "Upload failed", body: "The selected folder must contain a SKILL.md file." });
+        return;
+      }
+      const slug = folderName.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "skill";
+      const name = skillMd.match(/^name:\s*(.+)$/m)?.[1]?.trim() ?? slug;
+      const skill = await companySkillsApi.create(selectedCompanyId, { name, slug, markdown: skillMd });
+      for (const file of files) {
+        await companySkillsApi.updateFile(selectedCompanyId, skill.id, file.path, file.content);
+      }
+      await queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.list(selectedCompanyId) });
+      setImportDialogOpen(false);
+      navigate(routeForSkill(skill));
+      pushToast({
+        tone: "success",
+        title: "Skill uploaded",
+        body: `${name} uploaded with ${1 + files.length} file${files.length === 0 ? "" : "s"}.`,
+      });
+    } catch (error) {
+      pushToast({
+        tone: "error",
+        title: "Skill upload failed",
+        body: error instanceof Error ? error.message : "Failed to upload skill folder.",
+      });
+    } finally {
+      setUploadPending(false);
+    }
+  }
+
   // Opening a card stays inside the new store and always lands on a regular full
   // page: installed skills go to their detail route; catalog/bundled/optional
   // skills open the standalone catalog page (no modal, no legacy split view).
@@ -4607,6 +4659,34 @@ export function CompanySkills() {
                 {importSkill.isPending ? <RefreshCw className="h-4 w-4 animate-spin" /> : "Import"}
               </Button>
             </div>
+            <input
+              ref={uploadInputRef}
+              type="file"
+              // @ts-expect-error webkitdirectory is a non-standard folder-picker attribute
+              webkitdirectory=""
+              multiple
+              className="hidden"
+              onChange={(event) => {
+                if (event.target.files?.length) void handleUploadFolder(event.target.files);
+                event.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => uploadInputRef.current?.click()}
+              disabled={uploadPending}
+              className="flex w-full items-start justify-between rounded-md border border-border px-3 py-3 text-left text-sm text-foreground transition-colors hover:bg-accent/40 disabled:opacity-60"
+            >
+              <span>
+                <span className="block font-medium">{uploadPending ? "Uploading..." : "Upload a folder"}</span>
+                <span className="mt-1 block text-muted-foreground">
+                  Pick a skill folder from this machine (must contain SKILL.md).
+                </span>
+              </span>
+              {uploadPending
+                ? <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+                : <FolderUp className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />}
+            </button>
             <a
               href="https://skills.sh"
               target="_blank"
