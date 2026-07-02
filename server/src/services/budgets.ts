@@ -7,6 +7,7 @@ import {
   budgetPolicies,
   companies,
   costEvents,
+  issues,
   projects,
 } from "@paperclipai/db";
 import type {
@@ -809,6 +810,37 @@ export function budgetService(db: Db, hooks: BudgetServiceHooks = {}) {
             scopeName: agent.name,
             reason: "Agent cannot start because its budget hard-stop is still exceeded.",
           };
+        }
+      }
+
+      const candidateIssueId = context?.issueId ?? null;
+      if (candidateIssueId) {
+        const issue = await db
+          .select({
+            id: issues.id,
+            companyId: issues.companyId,
+            title: issues.title,
+            maxCostCents: issues.maxCostCents,
+          })
+          .from(issues)
+          .where(eq(issues.id, candidateIssueId))
+          .then((rows) => rows[0] ?? null);
+        if (issue && issue.companyId === companyId && issue.maxCostCents != null && issue.maxCostCents > 0) {
+          // Issue caps are lifetime totals, not windowed like policy budgets.
+          const [row] = await db
+            .select({
+              total: sql<number>`coalesce(sum(${costEvents.costCents}), 0)::double precision`,
+            })
+            .from(costEvents)
+            .where(and(eq(costEvents.companyId, companyId), eq(costEvents.issueId, candidateIssueId)));
+          if (Number(row?.total ?? 0) >= issue.maxCostCents) {
+            return {
+              scopeType: "issue" as const,
+              scopeId: issue.id,
+              scopeName: issue.title,
+              reason: "Issue cannot continue because its max cost cap has been reached.",
+            };
+          }
         }
       }
 

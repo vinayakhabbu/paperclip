@@ -827,6 +827,13 @@
       "when": 1781903000001,
       "tag": "0117_workflow_deploy_token",
       "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
+      "when": 1781903000002,
+      "tag": "0118_issue_max_cost",
+      "breakpoints": true
     }
   ]
 }

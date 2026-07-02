@@ -193,6 +193,69 @@ describe("budgetService", () => {
     });
   });
 
+  it("blocks invocation when the issue's max cost cap is reached", async () => {
+    const dbStub = createDbStub([
+      [{
+        status: "idle",
+        pauseReason: null,
+        companyId: "company-1",
+        name: "Budget Agent",
+      }],
+      [{
+        status: "active",
+        name: "Paperclip",
+      }],
+      [], // no company policy
+      [], // no agent policy
+      [{
+        id: "issue-1",
+        companyId: "company-1",
+        title: "Capped issue",
+        maxCostCents: 500,
+      }],
+      [{ total: 600 }],
+    ]);
+
+    const service = budgetService(dbStub.db as any);
+    const block = await service.getInvocationBlock("company-1", "agent-1", { issueId: "issue-1" });
+
+    expect(block).toEqual({
+      scopeType: "issue",
+      scopeId: "issue-1",
+      scopeName: "Capped issue",
+      reason: "Issue cannot continue because its max cost cap has been reached.",
+    });
+  });
+
+  it("allows invocation when issue spend is under the cap", async () => {
+    const dbStub = createDbStub([
+      [{
+        status: "idle",
+        pauseReason: null,
+        companyId: "company-1",
+        name: "Budget Agent",
+      }],
+      [{
+        status: "active",
+        name: "Paperclip",
+      }],
+      [], // no company policy
+      [], // no agent policy
+      [{
+        id: "issue-1",
+        companyId: "company-1",
+        title: "Capped issue",
+        maxCostCents: 500,
+      }],
+      [{ total: 100 }],
+    ]);
+
+    const service = budgetService(dbStub.db as any);
+    const block = await service.getInvocationBlock("company-1", "agent-1", { issueId: "issue-1" });
+
+    expect(block).toBeNull();
+  });
+
   it("surfaces a budget-owned company pause distinctly from a manual pause", async () => {
     const dbStub = createDbStub([
       [{
