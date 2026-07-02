@@ -102,6 +102,13 @@ export const issues = pgTable(
           and ${table.executionRunId} is not null
           and ${table.status} in ('backlog', 'todo', 'in_progress', 'in_review', 'blocked')`,
       ),
+    webhookIntakeIdx: uniqueIndex("issues_webhook_intake_uq")
+      .on(table.companyId, table.originKind, table.originId)
+      .where(
+        sql`${table.originKind} = 'webhook_intake'
+          and ${table.originId} is not null
+          and ${table.hiddenAt} is null`,
+      ),
     activeLivenessRecoveryIncidentIdx: uniqueIndex("issues_active_liveness_recovery_incident_uq")
       .on(table.companyId, table.originKind, table.originId)
       .where(
