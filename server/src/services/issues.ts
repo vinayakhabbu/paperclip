@@ -60,7 +60,7 @@ import {
   isUuidLike,
   normalizeIssueIdentifier as normalizeIssueReferenceIdentifier,
 } from "@paperclipai/shared";
-import { conflict, HttpError, notFound, unprocessable } from "../errors.js";
+import { conflict, forbidden, HttpError, notFound, unprocessable } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { parseObject } from "../adapters/utils.js";
 import {
@@ -133,6 +133,22 @@ export function requiredWorkProductBlockReason(
     "Attach a matching work product with an approved review state (or merged status), " +
     "or have a human waive the requirement by clearing requiredWorkProductType with a comment explaining why."
   );
+}
+
+// Only humans (or internal system callers, which carry no agent actor) may
+// weaken the deliverable requirement. Applies to every update, not just the
+// done transition, so an agent cannot clear the field in one call and close
+// in the next. Agents may still set the field when it is empty.
+export function requiredWorkProductChangeBlockReason(
+  actorAgentId: string | null | undefined,
+  existingType: string | null,
+  incomingType: string | null | undefined,
+): string | null {
+  if (!actorAgentId) return null;
+  if (incomingType === undefined) return null;
+  if (!existingType) return null;
+  if (incomingType === existingType) return null;
+  return "Agents cannot clear or change requiredWorkProductType; only a human can waive or alter the required deliverable.";
 }
 
 function applyStatusSideEffects(
@@ -5287,6 +5303,13 @@ export function issueService(db: Db) {
         delete issueData.executionWorkspacePreference;
         delete issueData.executionWorkspaceSettings;
       }
+
+      const requiredTypeChangeBlock = requiredWorkProductChangeBlockReason(
+        actorAgentId,
+        existing.requiredWorkProductType,
+        issueData.requiredWorkProductType,
+      );
+      if (requiredTypeChangeBlock) throw forbidden(requiredTypeChangeBlock);
 
       if (issueData.status) {
         assertTransition(existing.status, issueData.status);

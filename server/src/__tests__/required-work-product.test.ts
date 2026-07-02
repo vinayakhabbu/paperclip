@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { requiredWorkProductBlockReason } from "../services/issues.ts";
+import {
+  requiredWorkProductBlockReason,
+  requiredWorkProductChangeBlockReason,
+} from "../services/issues.ts";
 
 const approvedPr = { type: "pull_request", status: "active", reviewState: "approved" };
 const mergedPr = { type: "pull_request", status: "merged", reviewState: "none" };
@@ -34,5 +37,39 @@ describe("requiredWorkProductBlockReason", () => {
     // update() resolves the effective type as incoming ?? existing, so a PATCH
     // with { requiredWorkProductType: null, status: "done" } evaluates to null here.
     expect(requiredWorkProductBlockReason(null, [])).toBeNull();
+  });
+});
+
+describe("requiredWorkProductChangeBlockReason (waiver guard)", () => {
+  const AGENT = "agent-1";
+
+  it("human can clear the requirement (waive) and close", () => {
+    expect(requiredWorkProductChangeBlockReason(null, "pull_request", null)).toBeNull();
+    expect(requiredWorkProductChangeBlockReason(undefined, "pull_request", null)).toBeNull();
+  });
+
+  it("agent cannot clear the requirement", () => {
+    expect(requiredWorkProductChangeBlockReason(AGENT, "pull_request", null)).toMatch(/only a human/);
+  });
+
+  it("agent cannot change the required type to an easier one", () => {
+    expect(requiredWorkProductChangeBlockReason(AGENT, "test_report", "document")).toMatch(/only a human/);
+  });
+
+  it("agent updates that leave the field untouched still close normally", () => {
+    // field not in the patch at all
+    expect(requiredWorkProductChangeBlockReason(AGENT, "pull_request", undefined)).toBeNull();
+    // re-sending the same value is not a change
+    expect(requiredWorkProductChangeBlockReason(AGENT, "pull_request", "pull_request")).toBeNull();
+    // and the satisfied-deliverable path is unaffected (criterion 4)
+    expect(
+      requiredWorkProductBlockReason("pull_request", [
+        { type: "pull_request", status: "merged", reviewState: "none" },
+      ]),
+    ).toBeNull();
+  });
+
+  it("agent may set the requirement when it is empty (strengthening only)", () => {
+    expect(requiredWorkProductChangeBlockReason(AGENT, null, "pull_request")).toBeNull();
   });
 });
