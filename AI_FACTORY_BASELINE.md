@@ -1,9 +1,10 @@
 # AI Factory Baseline — plan validation against the existing codebase
 
 Verdict on the six-phase "AI Factory Enhancements" plan: **most of it already
-exists.** Paperclip is not an agent dashboard missing a factory layer; the
-factory layer is largely built. Building the plan as written would duplicate
-five of six phases. Below: what exists, where, and the two genuine gaps.
+exists**, some of it partially. Paperclip is not an agent dashboard missing a
+factory layer; the factory layer is largely built. Building the plan as
+written would duplicate large parts of it. Below: what exists, what is only
+partial, and the two gaps that were built.
 
 ## How work flows today (plan Phase 0)
 
@@ -32,10 +33,10 @@ five of six phases. Below: what exists, where, and the two genuine gaps.
 | Phase | Verdict | What already covers it |
 |---|---|---|
 | 1. Work intake queue | **Mostly exists** | Manual intake = New Task / `POST /issues` with board API keys (`board_api_keys`, hashed tokens). Routing = `backlog` status + CEO/CTO triage per AGENTS.md. Gap: webhook payload mapping + redelivery dedupe (built, see below). |
-| 2. Outcome-based completion | **Exists in substance** | Agent-authored `in_review` transitions are rejected without a real review path (approvals, `request_confirmation`, human reviewer, monitor — enforced in routes/issues.ts). Work products carry `review_state`; approvals + watchdogs + productivity review close the "fake done" hole. A separate `issue_outcome_requirements` table would duplicate work products + approvals. Not built. |
+| 2. Outcome-based completion | **Partially covered** | Agent-authored `in_review` transitions are rejected without a real review path (approvals, `request_confirmation`, human reviewer, monitor — enforced in routes/issues.ts). Work products carry `review_state`; approvals + watchdogs + productivity review close most of the "fake done" hole. But this is process gating, not typed required deliverables: nothing today lets you declare "this issue must produce a pull_request" and blocks `done` until a work product of that type exists. Required-deliverables-by-output-type is **not enforced yet**; add it as a small check on the `done` transition if process gates prove insufficient. |
 | 3. Artifact layer | **Fully exists** | `issue_work_products`, `issue_attachments`, `assets`, `company-artifacts.ts`, Artifacts UI page, upload script in the paperclip skill. Not built. |
-| 4. Company memory | **Deliberately skipped** | Documents system (+ revisions, annotations) and shared company files already give durable, human-editable shared state; the CEO's para-memory-files skill defines the file-based convention. A `company_memories` table + injection pipeline + UI is not first-order; revisit if file-based memory measurably fails. |
-| 5. Execution sandbox | **Fully exists** | `execution_workspaces` (strategy_type, provider_type, cleanup_reason), `sandbox-provider-runtime.ts`, workspace operations/runtime services, environments + leases, per-issue workspace settings, ExecutionWorkspaceDetail UI with logs. The plan's `SandboxProvider` interface already exists. Not built. |
+| 4. Company memory | **Deferred — not solved** | No shared cross-agent memory store exists. Documents system (+ revisions, annotations) and shared company files give durable, human-editable shared state, and the CEO's para-memory-files skill defines a file-based convention — but there is no structured memory table, no automatic context injection, and no cross-agent recall. Deferred deliberately; revisit when file-based memory measurably fails. |
+| 5. Execution sandbox | **Plumbing exists; isolation NOT verified** | The `SandboxProvider` interface, environment leases, `execution_workspaces` lifecycle (cleanup_reason, kill via run cancellation), and the ExecutionWorkspaceDetail UI all exist. However, the only registered provider is a **fake/no-op test provider** — no Docker or remote isolation is implemented. Local runs use `project_primary` (shared project dir) or `git_worktree` strategies: file-level separation on the same host and user, **not a security boundary**. Per-command `timeoutMs` exists only in the sandbox interface, not local execution (watchdogs/liveness cover runaway runs instead). Secrets are opt-in per agent via secret bindings rather than injected by default. Do not treat untrusted input as safely contained until a real provider lands. |
 | 6. Cost & capacity | **Mostly exists** | Budgets with hard stop at company/agent/project scope; per-agent `maxConcurrentRuns`; Costs UI. Gap: per-issue spend cap (built, see below). Per-adapter global concurrency remains an open upstream issue; not first-order for a single-box deployment. |
 
 ## The two genuine gaps (built)
@@ -54,5 +55,7 @@ five of six phases. Below: what exists, where, and the two genuine gaps.
 ## Not building (per plan's own exclusions + validation)
 
 CEO chat, SAP/Workday/Jira/Slack connectors, marketplaces, analytics, vector
-search, SSO, UI redesign — and additionally phases 2–5 above, because they
-already exist in this codebase under different names.
+search, SSO, UI redesign — and additionally phase 3 (fully exists), phase 2
+(process gates cover it well enough for now), phase 4 (deferred), and
+phase 5's real isolation provider (deferred; the fake provider and local
+worktree strategies are not a security boundary).
