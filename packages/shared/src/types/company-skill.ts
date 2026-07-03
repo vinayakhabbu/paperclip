@@ -296,6 +296,8 @@ export interface CompanySkillProjectScanResult {
 export interface CompanySkillCreateRequest {
   name: string;
   slug?: string | null;
+  /** Replace an existing skill with the same slug in place (id preserved). */
+  overwrite?: boolean;
   description?: string | null;
   markdown?: string | null;
   files?: CompanySkillFileUpdateRequest[];

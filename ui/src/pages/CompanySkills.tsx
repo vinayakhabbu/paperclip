@@ -4594,26 +4594,27 @@ export function CompanySkills() {
   }
 
   // Confirmed overwrite of an existing skill (slug conflict on upload).
+  // Single request: the create endpoint with overwrite=true replaces all
+  // files server-side and updates the skill row in place.
   async function overwriteSkillUpload(prompt: NonNullable<typeof overwritePrompt>) {
     if (!selectedCompanyId) return;
     setOverwritePrompt(null);
     setUploadProgress("Uploading…");
     try {
-      const existing = (await companySkillsApi.list(selectedCompanyId)).find((s) => s.slug === prompt.slug);
-      if (!existing) throw new Error(`Skill "${prompt.slug}" no longer exists; retry the upload.`);
-      const total = 1 + prompt.files.length;
-      await companySkillsApi.updateFile(selectedCompanyId, existing.id, "SKILL.md", prompt.skillMd);
-      for (const [index, file] of prompt.files.entries()) {
-        setUploadProgress(`Uploading ${index + 2}/${total}…`);
-        await companySkillsApi.updateFile(selectedCompanyId, existing.id, file.path, file.content);
-      }
+      const skill = await companySkillsApi.create(selectedCompanyId, {
+        name: prompt.name,
+        slug: prompt.slug,
+        markdown: prompt.skillMd,
+        files: prompt.files,
+        overwrite: true,
+      });
       await queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.list(selectedCompanyId) });
       setImportDialogOpen(false);
-      navigate(routeForSkill(existing));
+      navigate(routeForSkill(skill));
       pushToast({
         tone: "success",
         title: "Skill updated",
-        body: `${prompt.name}: ${total} file${total === 1 ? "" : "s"} overwritten.`,
+        body: `${prompt.name}: ${1 + prompt.files.length} file${prompt.files.length === 0 ? "" : "s"} overwritten.`,
       });
     } catch (error) {
       pushToast({

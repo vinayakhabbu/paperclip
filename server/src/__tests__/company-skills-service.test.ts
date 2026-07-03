@@ -372,6 +372,42 @@ describeEmbeddedPostgres("companySkillService.list", () => {
     ]);
   });
 
+  it("overwrites an existing skill in place when create is called with overwrite", async () => {
+    const companyId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    const original = await svc.createLocalSkill(companyId, {
+      name: "Uploaded Skill",
+      slug: "uploaded-skill",
+      markdown: "---\nname: Uploaded Skill\n---\n\n# v1\n",
+      files: [{ path: "references/old.md", content: "old\n" }],
+    }, { type: "user", userId: "board" });
+
+    await expect(svc.createLocalSkill(companyId, {
+      name: "Uploaded Skill",
+      slug: "uploaded-skill",
+      markdown: "---\nname: Uploaded Skill\n---\n\n# v2\n",
+    }, { type: "user", userId: "board" })).rejects.toThrow(/already exists/);
+
+    const replaced = await svc.createLocalSkill(companyId, {
+      name: "Uploaded Skill",
+      slug: "uploaded-skill",
+      overwrite: true,
+      markdown: "---\nname: Uploaded Skill\n---\n\n# v2\n",
+      files: [{ path: "references/new.md", content: "new\n" }],
+    }, { type: "user", userId: "board" });
+
+    expect(replaced.id).toBe(original.id);
+    expect(replaced.markdown).toContain("# v2");
+    expect(replaced.fileInventory.map((entry) => entry.path).sort()).toEqual(["SKILL.md", "references/new.md"]);
+    await expect(svc.readFile(companyId, replaced.id, "references/old.md")).rejects.toThrow(/not found/i);
+  });
+
   it("creates a fork from the creation flow with copied files and lineage", async () => {
     const companyId = randomUUID();
     const sourceSkillId = randomUUID();

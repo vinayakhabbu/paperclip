@@ -3110,7 +3110,7 @@ export function companySkillService(db: Db) {
     const slug = normalizeSkillSlug(input.slug ?? input.name) ?? "skill";
     const key = `company/${companyId}/${slug}`;
     const existing = await getByKey(companyId, key);
-    if (existing) {
+    if (existing && !input.overwrite) {
       throw conflict(`A company skill with slug "${slug}" already exists.`);
     }
 

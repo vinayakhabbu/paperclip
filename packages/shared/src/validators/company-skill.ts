@@ -255,6 +255,9 @@ const companySkillCreateFileSchema = z.object({
 export const companySkillCreateSchema = z.object({
   name: z.string().min(1),
   slug: z.string().min(1).nullable().optional(),
+  // Replace an existing skill with the same slug instead of failing with 409.
+  // The skill row is updated in place, so its id and agent assignments survive.
+  overwrite: z.boolean().optional(),
   description: z.string().nullable().optional(),
   markdown: z.string().nullable().optional(),
   files: z.array(companySkillCreateFileSchema).optional(),
