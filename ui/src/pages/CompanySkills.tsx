@@ -3779,6 +3779,15 @@ export function CompanySkills() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
+  // Slug conflict pending user decision; rendered inside the Import dialog.
+  // window.confirm is unreliable in embedded browsers (returns false without
+  // showing anything), which made conflicting uploads fail silently.
+  const [overwritePrompt, setOverwritePrompt] = useState<{
+    slug: string;
+    name: string;
+    skillMd: string;
+    files: Array<{ path: string; content: string }>;
+  } | null>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const zipInputRef = useRef<HTMLInputElement>(null);
   const [bulkSkillKeys, setBulkSkillKeys] = useState<Set<string>>(new Set());
@@ -4518,6 +4527,7 @@ export function CompanySkills() {
 
   async function handleUploadFolder(fileList: FileList) {
     if (!selectedCompanyId) return;
+    setOverwritePrompt(null);
     setUploadProgress("Reading files…");
     try {
       const files: Array<{ path: string; content: string }> = [];
@@ -4565,39 +4575,60 @@ export function CompanySkills() {
     const total = 1 + files.length;
 
     let skill;
-    let overwrote = false;
     setUploadProgress("Uploading…");
     try {
       skill = await companySkillsApi.create(selectedCompanyId, { name, slug, markdown: skillMd, files });
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 409) throw error;
-      if (!window.confirm(`A skill named "${slug}" already exists. Overwrite its files with this upload?`)) {
-        return;
-      }
-      const existing = (await companySkillsApi.list(selectedCompanyId)).find((s) => s.slug === slug);
-      if (!existing) throw error;
-      await companySkillsApi.updateFile(selectedCompanyId, existing.id, "SKILL.md", skillMd);
-      skill = existing;
-      overwrote = true;
-    }
-    if (overwrote) {
-      for (const [index, file] of files.entries()) {
-        setUploadProgress(`Uploading ${index + 2}/${total}…`);
-        await companySkillsApi.updateFile(selectedCompanyId, skill.id, file.path, file.content);
-      }
+      setOverwritePrompt({ slug, name, skillMd, files });
+      return;
     }
     await queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.list(selectedCompanyId) });
     setImportDialogOpen(false);
     navigate(routeForSkill(skill));
     pushToast({
       tone: "success",
-      title: overwrote ? "Skill updated" : "Skill uploaded",
-      body: `${name}: ${total} file${total === 1 ? "" : "s"} ${overwrote ? "overwritten" : "uploaded"}.`,
+      title: "Skill uploaded",
+      body: `${name}: ${total} file${total === 1 ? "" : "s"} uploaded.`,
     });
+  }
+
+  // Confirmed overwrite of an existing skill (slug conflict on upload).
+  async function overwriteSkillUpload(prompt: NonNullable<typeof overwritePrompt>) {
+    if (!selectedCompanyId) return;
+    setOverwritePrompt(null);
+    setUploadProgress("Uploading…");
+    try {
+      const existing = (await companySkillsApi.list(selectedCompanyId)).find((s) => s.slug === prompt.slug);
+      if (!existing) throw new Error(`Skill "${prompt.slug}" no longer exists; retry the upload.`);
+      const total = 1 + prompt.files.length;
+      await companySkillsApi.updateFile(selectedCompanyId, existing.id, "SKILL.md", prompt.skillMd);
+      for (const [index, file] of prompt.files.entries()) {
+        setUploadProgress(`Uploading ${index + 2}/${total}…`);
+        await companySkillsApi.updateFile(selectedCompanyId, existing.id, file.path, file.content);
+      }
+      await queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.list(selectedCompanyId) });
+      setImportDialogOpen(false);
+      navigate(routeForSkill(existing));
+      pushToast({
+        tone: "success",
+        title: "Skill updated",
+        body: `${prompt.name}: ${total} file${total === 1 ? "" : "s"} overwritten.`,
+      });
+    } catch (error) {
+      pushToast({
+        tone: "error",
+        title: "Skill upload failed",
+        body: error instanceof Error ? error.message : "Failed to overwrite skill.",
+      });
+    } finally {
+      setUploadProgress(null);
+    }
   }
 
   async function handleUploadZip(file: File) {
     if (!selectedCompanyId) return;
+    setOverwritePrompt(null);
     setUploadProgress("Reading archive…");
     try {
       const entries = await readZip(await file.arrayBuffer());
@@ -4792,7 +4823,13 @@ export function CompanySkills() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
+      <Dialog
+        open={importDialogOpen}
+        onOpenChange={(open) => {
+          setImportDialogOpen(open);
+          if (!open) setOverwritePrompt(null);
+        }}
+      >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Import a skill</DialogTitle>
@@ -4859,6 +4896,31 @@ export function CompanySkills() {
             >
               …or upload a .zip archive
             </button>
+            {overwritePrompt && (
+              <div className="rounded-md border border-border bg-accent/40 px-3 py-3 text-sm">
+                <p>
+                  A skill named <span className="font-medium">{overwritePrompt.slug}</span> already exists.
+                  Overwrite its files with this upload?
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void overwriteSkillUpload(overwritePrompt)}
+                    disabled={uploadProgress !== null}
+                    className="rounded-md border border-border bg-background px-3 py-1.5 font-medium hover:bg-accent/60 disabled:opacity-60"
+                  >
+                    Overwrite
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOverwritePrompt(null)}
+                    className="rounded-md px-3 py-1.5 text-muted-foreground hover:text-foreground"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
             <a
               href="https://skills.sh"
               target="_blank"
