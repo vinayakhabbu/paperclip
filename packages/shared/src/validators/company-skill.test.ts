@@ -3,6 +3,7 @@ import {
   catalogSkillFileDetailSchema,
   catalogSkillListQuerySchema,
   companySkillAuditResultSchema,
+  companySkillCreateSchema,
   companySkillInstallCatalogResultSchema,
   companySkillInstallCatalogSchema,
   companySkillInstallUpdateSchema,
@@ -103,6 +104,17 @@ describe("company skill catalog validators", () => {
   it("rejects invalid catalog filter and install payloads", () => {
     expect(() => catalogSkillListQuerySchema.parse({ kind: "external" })).toThrow();
     expect(() => companySkillInstallCatalogSchema.parse({ force: true })).toThrow();
+  });
+
+  it("accepts extra files when creating a company skill", () => {
+    expect(companySkillCreateSchema.parse({
+      name: "Upload Skill",
+      markdown: "# Upload Skill\n",
+      files: [{ path: "references/guide.md", content: "# Guide\n" }],
+    })).toMatchObject({
+      name: "Upload Skill",
+      files: [{ path: "references/guide.md", content: "# Guide\n" }],
+    });
   });
 
   it("accepts catalog file and install result responses", () => {

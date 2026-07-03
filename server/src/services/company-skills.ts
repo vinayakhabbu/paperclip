@@ -3154,8 +3154,16 @@ export function companySkillService(db: Db) {
       : forkSource?.markdown ?? fallbackMarkdown;
 
     await fs.writeFile(skillFilePath, markdown, "utf8");
+    const uploadedFiles = input.files ?? [];
+    for (const file of uploadedFiles) {
+      const relativePath = normalizePortablePath(file.path);
+      if (!relativePath || relativePath === "SKILL.md") continue;
+      const targetPath = path.resolve(skillDir, relativePath);
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.writeFile(targetPath, file.content, "utf8");
+    }
 
-    const inventory = forkSource
+    const inventory = forkSource || uploadedFiles.length > 0
       ? await collectLocalSkillInventory(skillDir)
       : [{ path: "SKILL.md", kind: "skill" as const }];
     const parsed = parseFrontmatterMarkdown(markdown);

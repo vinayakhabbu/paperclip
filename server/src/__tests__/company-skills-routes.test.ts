@@ -416,7 +416,12 @@ describe("company skill mutation permissions", () => {
 
     await request(app)
       .post("/api/companies/company-1/skills")
-      .send({ name: "Review", slug: "review", markdown: "# Review" })
+      .send({
+        name: "Review",
+        slug: "review",
+        markdown: "# Review",
+        files: [{ path: "references/guide.md", content: "# Guide" }],
+      })
       .expect(201);
     await request(app)
       .post("/api/companies/company-1/skills/import")
@@ -444,7 +449,13 @@ describe("company skill mutation permissions", () => {
 
     expect(mockAccessService.canUser).toHaveBeenCalledWith("company-1", "board-user", "skills:create");
     expect(mockAccessService.canUser).not.toHaveBeenCalledWith("company-1", "board-user", "agents:create");
-    expect(mockCompanySkillService.createLocalSkill).toHaveBeenCalled();
+    expect(mockCompanySkillService.createLocalSkill).toHaveBeenCalledWith(
+      "company-1",
+      expect.objectContaining({
+        files: [{ path: "references/guide.md", content: "# Guide" }],
+      }),
+      { type: "user", userId: "board-user" },
+    );
     expect(mockCompanySkillService.importFromSource).toHaveBeenCalled();
     expect(mockCompanySkillService.installFromCatalog).toHaveBeenCalled();
     expect(mockCompanySkillService.updateSkill).toHaveBeenCalled();

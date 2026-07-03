@@ -298,6 +298,7 @@ export interface CompanySkillCreateRequest {
   slug?: string | null;
   description?: string | null;
   markdown?: string | null;
+  files?: CompanySkillFileUpdateRequest[];
   iconUrl?: string | null;
   color?: string | null;
   tagline?: string | null;

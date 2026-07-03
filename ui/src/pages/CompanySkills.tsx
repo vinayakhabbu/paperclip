@@ -4529,7 +4529,7 @@ export function CompanySkills() {
         folderName = segments.length > 1 ? segments[0] : folderName;
         const rel = segments.length > 1 ? segments.slice(1).join("/") : segments[0];
         if (rel.split("/").some((s) => s.startsWith(".") || s === "node_modules" || s === "__pycache__")) continue;
-        if (file.size > 1_000_000) continue;
+        if (rel !== "SKILL.md" && file.size > 1_000_000) continue;
         const content = await file.text();
         // ponytail: text files only; binary assets need a storage-backed upload path
         if (content.includes("\u0000")) continue;
@@ -4566,9 +4566,9 @@ export function CompanySkills() {
 
     let skill;
     let overwrote = false;
-    setUploadProgress(`Uploading 1/${total}…`);
+    setUploadProgress("Uploading…");
     try {
-      skill = await companySkillsApi.create(selectedCompanyId, { name, slug, markdown: skillMd });
+      skill = await companySkillsApi.create(selectedCompanyId, { name, slug, markdown: skillMd, files });
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 409) throw error;
       if (!window.confirm(`A skill named "${slug}" already exists. Overwrite its files with this upload?`)) {
@@ -4580,9 +4580,11 @@ export function CompanySkills() {
       skill = existing;
       overwrote = true;
     }
-    for (const [index, file] of files.entries()) {
-      setUploadProgress(`Uploading ${index + 2}/${total}…`);
-      await companySkillsApi.updateFile(selectedCompanyId, skill.id, file.path, file.content);
+    if (overwrote) {
+      for (const [index, file] of files.entries()) {
+        setUploadProgress(`Uploading ${index + 2}/${total}…`);
+        await companySkillsApi.updateFile(selectedCompanyId, skill.id, file.path, file.content);
+      }
     }
     await queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.list(selectedCompanyId) });
     setImportDialogOpen(false);
@@ -4611,7 +4613,7 @@ export function CompanySkills() {
         const rel = strip ? entry.path.split("/").slice(1).join("/") : entry.path;
         if (!rel) continue;
         if (rel.split("/").some((s) => s.startsWith(".") || s === "node_modules" || s === "__pycache__")) continue;
-        if (entry.data.length > 1_000_000) continue;
+        if (rel !== "SKILL.md" && entry.data.length > 1_000_000) continue;
         // ponytail: text files only, same rule as the folder path (0 = NUL byte)
         if (entry.data.includes(0)) continue;
         const content = decoder.decode(entry.data);

@@ -343,6 +343,35 @@ describeEmbeddedPostgres("companySkillService.list", () => {
     await expect(svc.categoryCounts(companyId)).resolves.toEqual([]);
   });
 
+  it("creates uploaded local skills with extra files in the initial version", async () => {
+    const companyId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    const skill = await svc.createLocalSkill(companyId, {
+      name: "Uploaded Skill",
+      markdown: "---\nname: Uploaded Skill\n---\n\n# Uploaded Skill\n",
+      files: [{ path: "references/guide.md", content: "# Guide\n" }],
+    }, { type: "user", userId: "board" });
+
+    expect(skill.fileInventory.map((entry) => entry.path).sort()).toEqual(["SKILL.md", "references/guide.md"]);
+    await expect(svc.readFile(companyId, skill.id, "references/guide.md")).resolves.toMatchObject({
+      content: "# Guide\n",
+    });
+    await expect(svc.listVersions(companyId, skill.id)).resolves.toMatchObject([
+      {
+        revisionNumber: 1,
+        fileInventory: expect.arrayContaining([
+          expect.objectContaining({ path: "references/guide.md", content: "# Guide\n" }),
+        ]),
+      },
+    ]);
+  });
+
   it("creates a fork from the creation flow with copied files and lineage", async () => {
     const companyId = randomUUID();
     const sourceSkillId = randomUUID();

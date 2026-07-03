@@ -247,11 +247,17 @@ export const companySkillProjectScanResultSchema = z.object({
   warnings: z.array(z.string()),
 });
 
+const companySkillCreateFileSchema = z.object({
+  path: z.string().min(1),
+  content: z.string(),
+});
+
 export const companySkillCreateSchema = z.object({
   name: z.string().min(1),
   slug: z.string().min(1).nullable().optional(),
   description: z.string().nullable().optional(),
   markdown: z.string().nullable().optional(),
+  files: z.array(companySkillCreateFileSchema).optional(),
   iconUrl: z.string().nullable().optional(),
   color: z.string().nullable().optional(),
   tagline: z.string().max(120).nullable().optional(),
