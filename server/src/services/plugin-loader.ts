@@ -747,7 +747,7 @@ function buildLocalPluginRecoveryCommand(
     const repoRoot = options.repoRoot ?? REPO_ROOT;
     const relativePath = path.relative(repoRoot, packageRoot) || ".";
     const installCommand = buildStandaloneBundledPluginInstallCommand(packageRoot);
-    return `cd ${relativePath} && ${installCommand} && pnpm build`;
+    return `cd ${relativePath} && ${installCommand} && npm run build`;
   }
 
   return buildLocalPluginBuildCommand(pkgJson);
@@ -774,12 +774,17 @@ function buildLocalPluginBuildCommands(
         args: buildStandaloneBundledPluginInstallArgs(packageRoot),
         cwd: packageRoot,
       });
+      commands.push({
+        file: process.execPath,
+        args: [path.join(options.repoRoot ?? REPO_ROOT, "scripts", "link-plugin-dev-sdk.mjs")],
+        cwd: options.repoRoot ?? REPO_ROOT,
+      });
     }
 
     if (options.needsBuild !== false) {
       commands.push({
-        file: "pnpm",
-        args: ["build"],
+        file: "npm",
+        args: ["run", "build"],
         cwd: packageRoot,
       });
     }

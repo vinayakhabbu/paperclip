@@ -189,7 +189,7 @@ What that means in practice:
 - **Without `pnpm dev`:** the watcher only fires on `dist/*` changes. If you stop the watch build, source edits do not reach Paperclip. Restart `pnpm dev` (or run `pnpm build` once) before expecting changes.
 - **`node_modules`, `.git`, `.paperclip-sdk`, and other dotfolders are ignored.** Adding a dependency requires the new code to actually be imported and rebuilt before the worker sees it.
 
-The package's own build scripts still own compilation. Paperclip does not compile arbitrary local-path plugins for you. The exceptions are bundled plugins inside the Paperclip repo under `packages/plugins/`: workspace packages auto-build once with `pnpm --filter <package> build`, and standalone sandbox-provider packages under `packages/plugins/sandbox-providers/` first bootstrap package-local dependencies with `pnpm install --ignore-workspace ...` and then run `pnpm build` in place. Set `PAPERCLIP_DISABLE_PLUGIN_AUTOBUILD=1` in the server environment to disable those fallbacks.
+The package's own build scripts still own compilation. Paperclip does not compile arbitrary local-path plugins for you. The exceptions are bundled plugins inside the Paperclip repo under `packages/plugins/`: workspace packages auto-build once with `pnpm --filter <package> build`, and standalone sandbox-provider packages under `packages/plugins/sandbox-providers/` first bootstrap package-local dependencies with `pnpm install --ignore-workspace ...` and then run `npm run build` in place. Set `PAPERCLIP_DISABLE_PLUGIN_AUTOBUILD=1` in the server environment to disable those fallbacks.
 
 ## Local path plugins vs npm packages
 

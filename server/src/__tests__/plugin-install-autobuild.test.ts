@@ -218,14 +218,54 @@ describe("ensureLocalPluginBuilt", () => {
     cleanupPaths.add(fixture.packageRoot);
 
     const execStub = vi.fn(async (_file: string, args: readonly string[]) => {
-      if (args.join(" ") === "install --ignore-workspace --no-lockfile") {
+      if (args[0]?.endsWith("link-plugin-dev-sdk.mjs")) {
         await mkdir(path.join(fixture.packageRoot, "node_modules", "@paperclipai", "plugin-sdk"), { recursive: true });
       }
-      if (args.join(" ") === "build") {
+      if (_file === "npm" && args.join(" ") === "run build") {
         await mkdir(path.join(fixture.distDir, "ui"), { recursive: true });
         await writeFile(path.join(fixture.distDir, "manifest.js"), "export default {};\n", "utf8");
         await writeFile(path.join(fixture.distDir, "worker.js"), "export {};\n", "utf8");
         await writeFile(path.join(fixture.distDir, "ui", "index.js"), "export default {};\n", "utf8");
+      }
+      return { stdout: "", stderr: "" };
+    });
+    await ensureLocalPluginBuilt(
+      fixture.packageRoot,
+      JSON.parse(await readFile(path.join(fixture.packageRoot, "package.json"), "utf8")) as Record<string, unknown>,
+      { execFileAsyncImpl: execStub },
+    );
+
+    expect(execStub).toHaveBeenCalledTimes(3);
+    expect(execStub).toHaveBeenNthCalledWith(
+      1,
+      "pnpm",
+      ["install", "--ignore-workspace", "--no-lockfile"],
+      { cwd: fixture.packageRoot, timeout: 120_000 },
+    );
+    expect(execStub).toHaveBeenNthCalledWith(
+      2,
+      process.execPath,
+      [path.join(REPO_ROOT, "scripts", "link-plugin-dev-sdk.mjs")],
+      { cwd: REPO_ROOT, timeout: 120_000 },
+    );
+    expect(execStub).toHaveBeenNthCalledWith(
+      3,
+      "npm",
+      ["run", "build"],
+      { cwd: fixture.packageRoot, timeout: 120_000 },
+    );
+  });
+
+  it("bootstraps standalone bundled plugin runtime dependencies when dist already exists", async () => {
+    const fixture = await createBundledPluginFixture("standalone-runtime", {
+      rootDir: standaloneRepoPluginRoot,
+      buildDistImmediately: true,
+    });
+    cleanupPaths.add(fixture.packageRoot);
+
+    const execStub = vi.fn(async (_file: string, args: readonly string[]) => {
+      if (args[0]?.endsWith("link-plugin-dev-sdk.mjs")) {
+        await mkdir(path.join(fixture.packageRoot, "node_modules", "@paperclipai", "plugin-sdk"), { recursive: true });
       }
       return { stdout: "", stderr: "" };
     });
@@ -244,35 +284,9 @@ describe("ensureLocalPluginBuilt", () => {
     );
     expect(execStub).toHaveBeenNthCalledWith(
       2,
-      "pnpm",
-      ["build"],
-      { cwd: fixture.packageRoot, timeout: 120_000 },
-    );
-  });
-
-  it("bootstraps standalone bundled plugin runtime dependencies when dist already exists", async () => {
-    const fixture = await createBundledPluginFixture("standalone-runtime", {
-      rootDir: standaloneRepoPluginRoot,
-      buildDistImmediately: true,
-    });
-    cleanupPaths.add(fixture.packageRoot);
-
-    const execStub = vi.fn(async () => {
-      await mkdir(path.join(fixture.packageRoot, "node_modules", "@paperclipai", "plugin-sdk"), { recursive: true });
-      return { stdout: "", stderr: "" };
-    });
-    await ensureLocalPluginBuilt(
-      fixture.packageRoot,
-      JSON.parse(await readFile(path.join(fixture.packageRoot, "package.json"), "utf8")) as Record<string, unknown>,
-      { execFileAsyncImpl: execStub },
-    );
-
-    expect(execStub).toHaveBeenCalledTimes(1);
-    expect(execStub).toHaveBeenNthCalledWith(
-      1,
-      "pnpm",
-      ["install", "--ignore-workspace", "--no-lockfile"],
-      { cwd: fixture.packageRoot, timeout: 120_000 },
+      process.execPath,
+      [path.join(REPO_ROOT, "scripts", "link-plugin-dev-sdk.mjs")],
+      { cwd: REPO_ROOT, timeout: 120_000 },
     );
   });
 });
@@ -395,7 +409,7 @@ describeEmbeddedPostgres("plugin install auto-build route", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toContain("does not appear to be a Paperclip plugin (no manifest found)");
     expect(res.body.error).toContain(path.relative(REPO_ROOT, fixture.packageRoot));
-    expect(res.body.error).toContain("pnpm install --ignore-workspace --no-lockfile && pnpm build");
+    expect(res.body.error).toContain("pnpm install --ignore-workspace --no-lockfile && npm run build");
     expect(existsSync(path.join(fixture.distDir, "manifest.js"))).toBe(false);
     expect(mockLifecycle.load).not.toHaveBeenCalled();
   }, 20_000);

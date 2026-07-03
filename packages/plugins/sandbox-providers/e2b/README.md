@@ -27,7 +27,7 @@ Configure E2B from `Instance Settings -> Environments`, not from the plugin's pl
 ```bash
 cd packages/plugins/sandbox-providers/e2b
 pnpm install --ignore-workspace --no-lockfile
-pnpm build
+npm run build
 pnpm test
 pnpm typecheck
 ```

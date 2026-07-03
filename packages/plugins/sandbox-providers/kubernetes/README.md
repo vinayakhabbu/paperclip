@@ -153,7 +153,7 @@ cd packages/plugins/sandbox-providers/kubernetes
 pnpm install --ignore-workspace
 pnpm test           # unit tests only (fast)
 pnpm typecheck
-pnpm build
+npm run build
 ```
 
 To run the kind-cluster integration test (requires `kubectl --context kind-paperclip` and a pre-loaded alpine image; see `test/integration/end-to-end-run.test.ts`):

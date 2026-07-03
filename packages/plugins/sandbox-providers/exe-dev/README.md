@@ -44,7 +44,7 @@ Operational notes:
 ```bash
 cd packages/plugins/sandbox-providers/exe-dev
 pnpm install --ignore-workspace --no-lockfile
-pnpm build
+npm run build
 pnpm test
 pnpm typecheck
 ```

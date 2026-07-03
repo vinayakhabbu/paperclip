@@ -40,7 +40,7 @@ The package includes an operator-facing Cloudflare Worker scaffold under [bridge
 ```bash
 cd packages/plugins/sandbox-providers/cloudflare
 pnpm install --ignore-workspace --no-lockfile
-pnpm build
+npm run build
 pnpm test
 pnpm typecheck
 ```

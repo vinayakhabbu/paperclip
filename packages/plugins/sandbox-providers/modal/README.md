@@ -52,7 +52,7 @@ Because there is no real pause, **`reuseLease: true` keeps billing running** unt
 ```bash
 cd packages/plugins/sandbox-providers/modal
 pnpm install --ignore-workspace --no-lockfile
-pnpm build
+npm run build
 pnpm test
 pnpm typecheck
 ```

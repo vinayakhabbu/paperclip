@@ -19,7 +19,7 @@ dev). Future work may automate this in CI.
 ```bash
 cd packages/plugins/sandbox-providers/kubernetes
 pnpm install --ignore-workspace
-pnpm build
+npm run build
 ```
 
 Expected: `dist/` populated with compiled `.js` and `.d.ts` files. No errors.

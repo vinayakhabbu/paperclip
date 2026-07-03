@@ -27,7 +27,7 @@ Configure Novita from `Instance Settings -> Environments`, not from the plugin's
 ```bash
 cd packages/plugins/sandbox-providers/novita
 pnpm install --ignore-workspace --no-lockfile
-pnpm build
+npm run build
 pnpm test
 pnpm typecheck
 ```

@@ -34,7 +34,7 @@ Notes:
 ```bash
 cd packages/plugins/sandbox-providers/daytona
 pnpm install --ignore-workspace --no-lockfile
-pnpm build
+npm run build
 pnpm test
 pnpm typecheck
 ```
