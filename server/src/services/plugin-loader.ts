@@ -727,9 +727,11 @@ function buildStandaloneBundledPluginInstallArgs(
   packageRoot: string,
 ): string[] {
   const packageLockfilePath = path.join(packageRoot, "pnpm-lock.yaml");
+  // --prod=false: the build needs devDependencies (typescript, @types/node);
+  // under NODE_ENV=production pnpm would otherwise skip or prune them.
   return existsSync(packageLockfilePath)
-    ? ["install", "--ignore-workspace", "--frozen-lockfile"]
-    : ["install", "--ignore-workspace", "--no-lockfile"];
+    ? ["install", "--ignore-workspace", "--frozen-lockfile", "--prod=false"]
+    : ["install", "--ignore-workspace", "--no-lockfile", "--prod=false"];
 }
 
 function buildStandaloneBundledPluginInstallCommand(
@@ -764,9 +766,11 @@ function buildLocalPluginBuildCommands(
 ): LocalPluginBuildCommand[] {
   if (isStandaloneBundledPluginPath(packageRoot, { repoRoot: options.repoRoot })) {
     const commands: LocalPluginBuildCommand[] = [];
+    // Always install before a build: node_modules can exist half-bootstrapped
+    // (SDK symlink from root postinstall, or a prod-mode install without
+    // devDependencies), which would otherwise skip install and fail the build.
     const shouldInstallStandaloneRuntime =
-      options.needsStandaloneRuntimeBootstrap === true
-      || (!existsSync(path.join(packageRoot, "node_modules")) && options.needsBuild !== false);
+      options.needsStandaloneRuntimeBootstrap === true || options.needsBuild !== false;
 
     if (shouldInstallStandaloneRuntime) {
       commands.push({

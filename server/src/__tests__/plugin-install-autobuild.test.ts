@@ -239,7 +239,7 @@ describe("ensureLocalPluginBuilt", () => {
     expect(execStub).toHaveBeenNthCalledWith(
       1,
       "pnpm",
-      ["install", "--ignore-workspace", "--no-lockfile"],
+      ["install", "--ignore-workspace", "--no-lockfile", "--prod=false"],
       { cwd: fixture.packageRoot, timeout: 120_000 },
     );
     expect(execStub).toHaveBeenNthCalledWith(
@@ -279,7 +279,7 @@ describe("ensureLocalPluginBuilt", () => {
     expect(execStub).toHaveBeenNthCalledWith(
       1,
       "pnpm",
-      ["install", "--ignore-workspace", "--no-lockfile"],
+      ["install", "--ignore-workspace", "--no-lockfile", "--prod=false"],
       { cwd: fixture.packageRoot, timeout: 120_000 },
     );
     expect(execStub).toHaveBeenNthCalledWith(
@@ -409,7 +409,7 @@ describeEmbeddedPostgres("plugin install auto-build route", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toContain("does not appear to be a Paperclip plugin (no manifest found)");
     expect(res.body.error).toContain(path.relative(REPO_ROOT, fixture.packageRoot));
-    expect(res.body.error).toContain("pnpm install --ignore-workspace --no-lockfile && npm run build");
+    expect(res.body.error).toContain("pnpm install --ignore-workspace --no-lockfile --prod=false && npm run build");
     expect(existsSync(path.join(fixture.distDir, "manifest.js"))).toBe(false);
     expect(mockLifecycle.load).not.toHaveBeenCalled();
   }, 20_000);
