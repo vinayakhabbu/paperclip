@@ -843,16 +843,23 @@ export async function ensureLocalPluginBuilt(
       );
     }
   } catch (error) {
-    const stderr = typeof (error as { stderr?: unknown }).stderr === "string"
-      ? (error as { stderr: string }).stderr.trim()
-      : "";
+    // tsc writes its diagnostics to stdout, so stderr alone is often just noise
+    // (e.g. npm update notices). Surface both, tail-truncated.
+    const output = (["stdout", "stderr"] as const)
+      .map((key) => {
+        const value = (error as Record<string, unknown>)[key];
+        return typeof value === "string" ? value.trim() : "";
+      })
+      .filter(Boolean)
+      .join("\n")
+      .slice(-2000);
     const timeoutMessage = (error as { killed?: unknown }).killed === true
       ? ` after timing out at ${LOCAL_PLUGIN_AUTOBUILD_TIMEOUT_MS}ms`
       : "";
-    const stderrMessage = stderr.length > 0 ? ` stderr: ${stderr}` : "";
+    const outputMessage = output.length > 0 ? ` output: ${output}` : "";
     throw new Error(
       `Failed to auto-build bundled local plugin ${packageName}${timeoutMessage}. ` +
-        `Run \`${manualBuildCommand}\` from the repo root and retry.${stderrMessage}`,
+        `Run \`${manualBuildCommand}\` from the repo root and retry.${outputMessage}`,
     );
   }
 
