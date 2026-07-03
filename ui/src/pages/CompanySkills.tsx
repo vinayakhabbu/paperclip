@@ -23,6 +23,7 @@ import type {
 } from "@paperclipai/shared";
 import { companySkillsApi } from "../api/companySkills";
 import { ApiError } from "../api/client";
+import { readZip } from "../lib/unzip";
 import { agentsApi } from "../api/agents";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -3779,6 +3780,7 @@ export function CompanySkills() {
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  const zipInputRef = useRef<HTMLInputElement>(null);
   const [bulkSkillKeys, setBulkSkillKeys] = useState<Set<string>>(new Set());
   const parsedRoute = useMemo(() => parseSkillRoute(routePath), [routePath]);
   const routeSkillToken = parsedRoute.skillToken;
@@ -4534,47 +4536,94 @@ export function CompanySkills() {
         if (rel === "SKILL.md") skillMd = content;
         else files.push({ path: rel, content });
       }
-      if (!skillMd) {
-        pushToast({ tone: "error", title: "Upload failed", body: "The selected folder must contain a SKILL.md file." });
-        return;
-      }
-      const slug = folderName.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "skill";
-      const name = skillMd.match(/^name:\s*(.+)$/m)?.[1]?.trim() ?? slug;
-      const total = 1 + files.length;
-
-      let skill;
-      let overwrote = false;
-      setUploadProgress(`Uploading 1/${total}…`);
-      try {
-        skill = await companySkillsApi.create(selectedCompanyId, { name, slug, markdown: skillMd });
-      } catch (error) {
-        if (!(error instanceof ApiError) || error.status !== 409) throw error;
-        if (!window.confirm(`A skill named "${slug}" already exists. Overwrite its files with this folder?`)) {
-          return;
-        }
-        const existing = (await companySkillsApi.list(selectedCompanyId)).find((s) => s.slug === slug);
-        if (!existing) throw error;
-        await companySkillsApi.updateFile(selectedCompanyId, existing.id, "SKILL.md", skillMd);
-        skill = existing;
-        overwrote = true;
-      }
-      for (const [index, file] of files.entries()) {
-        setUploadProgress(`Uploading ${index + 2}/${total}…`);
-        await companySkillsApi.updateFile(selectedCompanyId, skill.id, file.path, file.content);
-      }
-      await queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.list(selectedCompanyId) });
-      setImportDialogOpen(false);
-      navigate(routeForSkill(skill));
-      pushToast({
-        tone: "success",
-        title: overwrote ? "Skill updated" : "Skill uploaded",
-        body: `${name}: ${total} file${total === 1 ? "" : "s"} ${overwrote ? "overwritten" : "uploaded"}.`,
-      });
+      await finishSkillUpload(folderName, skillMd, files);
     } catch (error) {
       pushToast({
         tone: "error",
         title: "Skill upload failed",
         body: error instanceof Error ? error.message : "Failed to upload skill folder.",
+      });
+    } finally {
+      setUploadProgress(null);
+    }
+  }
+
+  // Shared tail of both upload paths (folder picker and .zip): create or
+  // overwrite the skill, upload the extra files with progress, then navigate.
+  async function finishSkillUpload(
+    folderName: string,
+    skillMd: string | null,
+    files: Array<{ path: string; content: string }>,
+  ) {
+    if (!selectedCompanyId) return;
+    if (!skillMd) {
+      pushToast({ tone: "error", title: "Upload failed", body: "The upload must contain a SKILL.md file." });
+      return;
+    }
+    const slug = folderName.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "skill";
+    const name = skillMd.match(/^name:\s*(.+)$/m)?.[1]?.trim() ?? slug;
+    const total = 1 + files.length;
+
+    let skill;
+    let overwrote = false;
+    setUploadProgress(`Uploading 1/${total}…`);
+    try {
+      skill = await companySkillsApi.create(selectedCompanyId, { name, slug, markdown: skillMd });
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 409) throw error;
+      if (!window.confirm(`A skill named "${slug}" already exists. Overwrite its files with this upload?`)) {
+        return;
+      }
+      const existing = (await companySkillsApi.list(selectedCompanyId)).find((s) => s.slug === slug);
+      if (!existing) throw error;
+      await companySkillsApi.updateFile(selectedCompanyId, existing.id, "SKILL.md", skillMd);
+      skill = existing;
+      overwrote = true;
+    }
+    for (const [index, file] of files.entries()) {
+      setUploadProgress(`Uploading ${index + 2}/${total}…`);
+      await companySkillsApi.updateFile(selectedCompanyId, skill.id, file.path, file.content);
+    }
+    await queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.list(selectedCompanyId) });
+    setImportDialogOpen(false);
+    navigate(routeForSkill(skill));
+    pushToast({
+      tone: "success",
+      title: overwrote ? "Skill updated" : "Skill uploaded",
+      body: `${name}: ${total} file${total === 1 ? "" : "s"} ${overwrote ? "overwritten" : "uploaded"}.`,
+    });
+  }
+
+  async function handleUploadZip(file: File) {
+    if (!selectedCompanyId) return;
+    setUploadProgress("Reading archive…");
+    try {
+      const entries = await readZip(await file.arrayBuffer());
+      // If everything in the archive lives under one top-level folder, strip it
+      // and use it as the skill name; otherwise name the skill after the zip.
+      const tops = new Set(entries.map((entry) => entry.path.split("/")[0]));
+      const strip = tops.size === 1 && entries.every((entry) => entry.path.includes("/"));
+      const folderName = strip ? [...tops][0] : file.name.replace(/\.zip$/i, "");
+      const decoder = new TextDecoder();
+      const files: Array<{ path: string; content: string }> = [];
+      let skillMd: string | null = null;
+      for (const entry of entries) {
+        const rel = strip ? entry.path.split("/").slice(1).join("/") : entry.path;
+        if (!rel) continue;
+        if (rel.split("/").some((s) => s.startsWith(".") || s === "node_modules" || s === "__pycache__")) continue;
+        if (entry.data.length > 1_000_000) continue;
+        // ponytail: text files only, same rule as the folder path (0 = NUL byte)
+        if (entry.data.includes(0)) continue;
+        const content = decoder.decode(entry.data);
+        if (rel === "SKILL.md") skillMd = content;
+        else files.push({ path: rel, content });
+      }
+      await finishSkillUpload(folderName, skillMd, files);
+    } catch (error) {
+      pushToast({
+        tone: "error",
+        title: "Skill upload failed",
+        body: error instanceof Error ? error.message : "Failed to read the zip archive.",
       });
     } finally {
       setUploadProgress(null);
@@ -4788,6 +4837,25 @@ export function CompanySkills() {
               {uploadProgress !== null
                 ? <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
                 : <FolderUp className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />}
+            </button>
+            <input
+              ref={zipInputRef}
+              type="file"
+              accept=".zip,application/zip"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void handleUploadZip(file);
+                event.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => zipInputRef.current?.click()}
+              disabled={uploadProgress !== null}
+              className="-mt-1 self-start px-3 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-60"
+            >
+              …or upload a .zip archive
             </button>
             <a
               href="https://skills.sh"
