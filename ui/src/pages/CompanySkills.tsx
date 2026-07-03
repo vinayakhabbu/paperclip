@@ -22,6 +22,7 @@ import type {
   CompanySkillVersion,
 } from "@paperclipai/shared";
 import { companySkillsApi } from "../api/companySkills";
+import { ApiError } from "../api/client";
 import { agentsApi } from "../api/agents";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -3733,7 +3734,7 @@ export function CompanySkills() {
   const [createDraft, setCreateDraft] = useState<SkillCreateDraft>(() => buildBlankSkillDraft());
   const [createError, setCreateError] = useState<string | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
-  const [uploadPending, setUploadPending] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const parsedRoute = useMemo(() => parseSkillRoute(routePath), [routePath]);
   const routeSkillToken = parsedRoute.skillToken;
@@ -4432,7 +4433,7 @@ export function CompanySkills() {
 
   async function handleUploadFolder(fileList: FileList) {
     if (!selectedCompanyId) return;
-    setUploadPending(true);
+    setUploadProgress("Reading files…");
     try {
       const files: Array<{ path: string; content: string }> = [];
       let skillMd: string | null = null;
@@ -4456,8 +4457,26 @@ export function CompanySkills() {
       }
       const slug = folderName.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "skill";
       const name = skillMd.match(/^name:\s*(.+)$/m)?.[1]?.trim() ?? slug;
-      const skill = await companySkillsApi.create(selectedCompanyId, { name, slug, markdown: skillMd });
-      for (const file of files) {
+      const total = 1 + files.length;
+
+      let skill;
+      let overwrote = false;
+      setUploadProgress(`Uploading 1/${total}…`);
+      try {
+        skill = await companySkillsApi.create(selectedCompanyId, { name, slug, markdown: skillMd });
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.status !== 409) throw error;
+        if (!window.confirm(`A skill named "${slug}" already exists. Overwrite its files with this folder?`)) {
+          return;
+        }
+        const existing = (await companySkillsApi.list(selectedCompanyId)).find((s) => s.slug === slug);
+        if (!existing) throw error;
+        await companySkillsApi.updateFile(selectedCompanyId, existing.id, "SKILL.md", skillMd);
+        skill = existing;
+        overwrote = true;
+      }
+      for (const [index, file] of files.entries()) {
+        setUploadProgress(`Uploading ${index + 2}/${total}…`);
         await companySkillsApi.updateFile(selectedCompanyId, skill.id, file.path, file.content);
       }
       await queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.list(selectedCompanyId) });
@@ -4465,8 +4484,8 @@ export function CompanySkills() {
       navigate(routeForSkill(skill));
       pushToast({
         tone: "success",
-        title: "Skill uploaded",
-        body: `${name} uploaded with ${1 + files.length} file${files.length === 0 ? "" : "s"}.`,
+        title: overwrote ? "Skill updated" : "Skill uploaded",
+        body: `${name}: ${total} file${total === 1 ? "" : "s"} ${overwrote ? "overwritten" : "uploaded"}.`,
       });
     } catch (error) {
       pushToast({
@@ -4475,7 +4494,7 @@ export function CompanySkills() {
         body: error instanceof Error ? error.message : "Failed to upload skill folder.",
       });
     } finally {
-      setUploadPending(false);
+      setUploadProgress(null);
     }
   }
 
@@ -4674,16 +4693,16 @@ export function CompanySkills() {
             <button
               type="button"
               onClick={() => uploadInputRef.current?.click()}
-              disabled={uploadPending}
+              disabled={uploadProgress !== null}
               className="flex w-full items-start justify-between rounded-md border border-border px-3 py-3 text-left text-sm text-foreground transition-colors hover:bg-accent/40 disabled:opacity-60"
             >
               <span>
-                <span className="block font-medium">{uploadPending ? "Uploading..." : "Upload a folder"}</span>
+                <span className="block font-medium">{uploadProgress ?? "Upload a folder"}</span>
                 <span className="mt-1 block text-muted-foreground">
                   Pick a skill folder from this machine (must contain SKILL.md).
                 </span>
               </span>
-              {uploadPending
+              {uploadProgress !== null
                 ? <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
                 : <FolderUp className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />}
             </button>
