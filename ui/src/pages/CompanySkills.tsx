@@ -3779,15 +3779,15 @@ export function CompanySkills() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
-  // Slug conflict pending user decision; rendered inside the Import dialog.
+  // Slug conflicts pending user decision; rendered inside the Import dialog.
   // window.confirm is unreliable in embedded browsers (returns false without
   // showing anything), which made conflicting uploads fail silently.
-  const [overwritePrompt, setOverwritePrompt] = useState<{
+  const [overwritePrompt, setOverwritePrompt] = useState<Array<{
     slug: string;
     name: string;
     skillMd: string;
     files: Array<{ path: string; content: string }>;
-  } | null>(null);
+  }> | null>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const zipInputRef = useRef<HTMLInputElement>(null);
   const [bulkSkillKeys, setBulkSkillKeys] = useState<Set<string>>(new Set());
@@ -4580,7 +4580,7 @@ export function CompanySkills() {
       skill = await companySkillsApi.create(selectedCompanyId, { name, slug, markdown: skillMd, files });
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 409) throw error;
-      setOverwritePrompt({ slug, name, skillMd, files });
+      setOverwritePrompt([{ slug, name, skillMd, files }]);
       return;
     }
     await queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.list(selectedCompanyId) });
@@ -4593,28 +4593,33 @@ export function CompanySkills() {
     });
   }
 
-  // Confirmed overwrite of an existing skill (slug conflict on upload).
-  // Single request: the create endpoint with overwrite=true replaces all
-  // files server-side and updates the skill row in place.
-  async function overwriteSkillUpload(prompt: NonNullable<typeof overwritePrompt>) {
+  // Confirmed overwrite of existing skills (slug conflicts on upload).
+  // One request per skill: the create endpoint with overwrite=true replaces
+  // all files server-side and updates the skill row in place.
+  async function overwriteSkillUpload(prompts: NonNullable<typeof overwritePrompt>) {
     if (!selectedCompanyId) return;
     setOverwritePrompt(null);
-    setUploadProgress("Uploading…");
     try {
-      const skill = await companySkillsApi.create(selectedCompanyId, {
-        name: prompt.name,
-        slug: prompt.slug,
-        markdown: prompt.skillMd,
-        files: prompt.files,
-        overwrite: true,
-      });
+      let lastSkill;
+      for (const [index, prompt] of prompts.entries()) {
+        setUploadProgress(prompts.length > 1 ? `Overwriting ${index + 1}/${prompts.length}…` : "Uploading…");
+        lastSkill = await companySkillsApi.create(selectedCompanyId, {
+          name: prompt.name,
+          slug: prompt.slug,
+          markdown: prompt.skillMd,
+          files: prompt.files,
+          overwrite: true,
+        });
+      }
       await queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.list(selectedCompanyId) });
       setImportDialogOpen(false);
-      navigate(routeForSkill(skill));
+      if (prompts.length === 1 && lastSkill) navigate(routeForSkill(lastSkill));
       pushToast({
         tone: "success",
-        title: "Skill updated",
-        body: `${prompt.name}: ${1 + prompt.files.length} file${prompt.files.length === 0 ? "" : "s"} overwritten.`,
+        title: prompts.length === 1 ? "Skill updated" : "Skills updated",
+        body: prompts.length === 1
+          ? `${prompts[0].name}: ${1 + prompts[0].files.length} file${prompts[0].files.length === 0 ? "" : "s"} overwritten.`
+          : `${prompts.length} skills overwritten.`,
       });
     } catch (error) {
       pushToast({
@@ -4627,38 +4632,96 @@ export function CompanySkills() {
     }
   }
 
-  async function handleUploadZip(file: File) {
-    if (!selectedCompanyId) return;
+  async function parseZipSkill(file: File): Promise<{
+    folderName: string;
+    skillMd: string | null;
+    files: Array<{ path: string; content: string }>;
+  }> {
+    const entries = await readZip(await file.arrayBuffer());
+    // If everything in the archive lives under one top-level folder, strip it
+    // and use it as the skill name; otherwise name the skill after the zip.
+    const tops = new Set(entries.map((entry) => entry.path.split("/")[0]));
+    const strip = tops.size === 1 && entries.every((entry) => entry.path.includes("/"));
+    const folderName = strip ? [...tops][0] : file.name.replace(/\.zip$/i, "");
+    const decoder = new TextDecoder();
+    const files: Array<{ path: string; content: string }> = [];
+    let skillMd: string | null = null;
+    for (const entry of entries) {
+      const rel = strip ? entry.path.split("/").slice(1).join("/") : entry.path;
+      if (!rel) continue;
+      if (rel.split("/").some((s) => s.startsWith(".") || s === "node_modules" || s === "__pycache__")) continue;
+      if (rel !== "SKILL.md" && entry.data.length > 1_000_000) continue;
+      // ponytail: text files only, same rule as the folder path (0 = NUL byte)
+      if (entry.data.includes(0)) continue;
+      const content = decoder.decode(entry.data);
+      if (rel === "SKILL.md") skillMd = content;
+      else files.push({ path: rel, content });
+    }
+    return { folderName, skillMd, files };
+  }
+
+  async function handleUploadZips(zipFiles: File[]) {
+    if (!selectedCompanyId || zipFiles.length === 0) return;
     setOverwritePrompt(null);
-    setUploadProgress("Reading archive…");
-    try {
-      const entries = await readZip(await file.arrayBuffer());
-      // If everything in the archive lives under one top-level folder, strip it
-      // and use it as the skill name; otherwise name the skill after the zip.
-      const tops = new Set(entries.map((entry) => entry.path.split("/")[0]));
-      const strip = tops.size === 1 && entries.every((entry) => entry.path.includes("/"));
-      const folderName = strip ? [...tops][0] : file.name.replace(/\.zip$/i, "");
-      const decoder = new TextDecoder();
-      const files: Array<{ path: string; content: string }> = [];
-      let skillMd: string | null = null;
-      for (const entry of entries) {
-        const rel = strip ? entry.path.split("/").slice(1).join("/") : entry.path;
-        if (!rel) continue;
-        if (rel.split("/").some((s) => s.startsWith(".") || s === "node_modules" || s === "__pycache__")) continue;
-        if (rel !== "SKILL.md" && entry.data.length > 1_000_000) continue;
-        // ponytail: text files only, same rule as the folder path (0 = NUL byte)
-        if (entry.data.includes(0)) continue;
-        const content = decoder.decode(entry.data);
-        if (rel === "SKILL.md") skillMd = content;
-        else files.push({ path: rel, content });
+    // Single zip keeps the existing flow (navigate to the skill, 409 → prompt).
+    if (zipFiles.length === 1) {
+      setUploadProgress("Reading archive…");
+      try {
+        const parsed = await parseZipSkill(zipFiles[0]);
+        await finishSkillUpload(parsed.folderName, parsed.skillMd, parsed.files);
+      } catch (error) {
+        pushToast({
+          tone: "error",
+          title: "Skill upload failed",
+          body: error instanceof Error ? error.message : "Failed to read the zip archive.",
+        });
+      } finally {
+        setUploadProgress(null);
       }
-      await finishSkillUpload(folderName, skillMd, files);
-    } catch (error) {
-      pushToast({
-        tone: "error",
-        title: "Skill upload failed",
-        body: error instanceof Error ? error.message : "Failed to read the zip archive.",
-      });
+      return;
+    }
+
+    // Batch: upload each zip as its own skill; collect conflicts for one prompt.
+    const conflicts: NonNullable<typeof overwritePrompt> = [];
+    const failed: string[] = [];
+    let uploaded = 0;
+    try {
+      for (const [index, file] of zipFiles.entries()) {
+        setUploadProgress(`Uploading ${index + 1}/${zipFiles.length}…`);
+        try {
+          const { folderName, skillMd, files } = await parseZipSkill(file);
+          if (!skillMd) {
+            failed.push(`${file.name} (no SKILL.md)`);
+            continue;
+          }
+          const slug = folderName.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "skill";
+          const name = skillMd.match(/^name:\s*(.+)$/m)?.[1]?.trim() ?? slug;
+          try {
+            await companySkillsApi.create(selectedCompanyId, { name, slug, markdown: skillMd, files });
+            uploaded += 1;
+          } catch (error) {
+            if (error instanceof ApiError && error.status === 409) {
+              conflicts.push({ slug, name, skillMd, files });
+            } else {
+              failed.push(`${file.name} (${error instanceof Error ? error.message : "upload failed"})`);
+            }
+          }
+        } catch (error) {
+          failed.push(`${file.name} (${error instanceof Error ? error.message : "unreadable zip"})`);
+        }
+      }
+      await queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.list(selectedCompanyId) });
+      if (uploaded > 0) {
+        pushToast({ tone: "success", title: "Skills uploaded", body: `${uploaded} skill${uploaded === 1 ? "" : "s"} uploaded.` });
+      }
+      if (failed.length > 0) {
+        pushToast({ tone: "error", title: "Some uploads failed", body: failed.join("; ") });
+      }
+      if (conflicts.length > 0) {
+        setOverwritePrompt(conflicts);
+      } else if (uploaded > 0) {
+        setImportDialogOpen(false);
+      }
     } finally {
       setUploadProgress(null);
     }
@@ -4882,10 +4945,11 @@ export function CompanySkills() {
               ref={zipInputRef}
               type="file"
               accept=".zip,application/zip"
+              multiple
               className="hidden"
               onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) void handleUploadZip(file);
+                const files = Array.from(event.target.files ?? []);
+                if (files.length > 0) void handleUploadZips(files);
                 event.target.value = "";
               }}
             />
@@ -4895,13 +4959,23 @@ export function CompanySkills() {
               disabled={uploadProgress !== null}
               className="-mt-1 self-start px-3 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-60"
             >
-              …or upload a .zip archive
+              …or upload .zip archives
             </button>
-            {overwritePrompt && (
+            {overwritePrompt && overwritePrompt.length > 0 && (
               <div className="rounded-md border border-border bg-accent/40 px-3 py-3 text-sm">
                 <p>
-                  A skill named <span className="font-medium">{overwritePrompt.slug}</span> already exists.
-                  Overwrite its files with this upload?
+                  {overwritePrompt.length === 1 ? (
+                    <>
+                      A skill named <span className="font-medium">{overwritePrompt[0].slug}</span> already exists.
+                      Overwrite its files with this upload?
+                    </>
+                  ) : (
+                    <>
+                      {overwritePrompt.length} skills already exist
+                      {" "}(<span className="font-medium">{overwritePrompt.map((p) => p.slug).join(", ")}</span>).
+                      Overwrite them with this upload?
+                    </>
+                  )}
                 </p>
                 <div className="mt-2 flex gap-2">
                   <button
