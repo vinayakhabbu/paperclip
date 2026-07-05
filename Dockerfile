@@ -63,7 +63,7 @@ RUN npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/cod
   && apt-get install -y --no-install-recommends openssh-client jq python3-venv \
   && rm -rf /var/lib/apt/lists/* \
   && python3 -m venv /opt/hermes \
-  && /opt/hermes/bin/pip install --no-cache-dir hermes-agent \
+  && /opt/hermes/bin/pip install --no-cache-dir "hermes-agent[anthropic]" \
   && ln -s /opt/hermes/bin/hermes /usr/local/bin/hermes \
   && command -v hermes >/dev/null || (echo "ERROR: hermes CLI not on PATH after install" && exit 1) \
   && mkdir -p /paperclip \
