@@ -2074,32 +2074,47 @@ export function IssuesList({
           )}
         </>
       )}
-      {enableBulkActions && selectedIssueIds.size > 0 ? (
+      {enableBulkActions && filtered.length > 0 ? (
         <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-border bg-background px-4 py-2 shadow-lg">
-          <span className="text-sm text-foreground">
-            {selectedIssueIds.size} task{selectedIssueIds.size === 1 ? "" : "s"} selected
-          </span>
-          <Button size="sm" variant="ghost" onClick={archiveSelectedIssues}>
-            <Archive className="h-3.5 w-3.5" />
-            Archive
-          </Button>
           <Button
             size="sm"
             variant="ghost"
-            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-            disabled={deleteSelectedIssues.isPending}
-            onClick={() => {
-              const count = selectedIssueIds.size;
-              if (!window.confirm(`Permanently delete ${count} task${count === 1 ? "" : "s"}? This cannot be undone.`)) return;
-              deleteSelectedIssues.mutate();
-            }}
+            onClick={() =>
+              setSelectedIssueIds(
+                selectedIssueIds.size === filtered.length ? new Set() : new Set(filtered.map((issue) => issue.id)),
+              )
+            }
           >
-            <Trash2 className="h-3.5 w-3.5" />
-            {deleteSelectedIssues.isPending ? "Deleting…" : "Delete"}
+            {selectedIssueIds.size === filtered.length ? "Deselect all" : `Select all (${filtered.length})`}
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => setSelectedIssueIds(new Set())}>
-            Clear
-          </Button>
+          {selectedIssueIds.size > 0 ? (
+            <>
+              <span className="text-sm text-foreground">
+                {selectedIssueIds.size} task{selectedIssueIds.size === 1 ? "" : "s"} selected
+              </span>
+              <Button size="sm" variant="ghost" onClick={archiveSelectedIssues}>
+                <Archive className="h-3.5 w-3.5" />
+                Archive
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                disabled={deleteSelectedIssues.isPending}
+                onClick={() => {
+                  const count = selectedIssueIds.size;
+                  if (!window.confirm(`Permanently delete ${count} task${count === 1 ? "" : "s"}? This cannot be undone.`)) return;
+                  deleteSelectedIssues.mutate();
+                }}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                {deleteSelectedIssues.isPending ? "Deleting…" : "Delete"}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setSelectedIssueIds(new Set())}>
+                Clear
+              </Button>
+            </>
+          ) : null}
         </div>
       ) : null}
     </div>
