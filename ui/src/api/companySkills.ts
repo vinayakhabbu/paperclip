@@ -106,6 +106,10 @@ export const companySkillsApi = {
       `/companies/${encodeURIComponent(companyId)}/skills/${encodeURIComponent(skillId)}/files`,
       { path, content },
     ),
+  export: (companyId: string, skillId: string) =>
+    api.get<{ rootPath: string; files: Record<string, string> }>(
+      `/companies/${encodeURIComponent(companyId)}/skills/${encodeURIComponent(skillId)}/export`,
+    ),
   create: (companyId: string, payload: CompanySkillCreateRequest) =>
     api.post<CompanySkill>(
       `/companies/${encodeURIComponent(companyId)}/skills`,

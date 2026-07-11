@@ -213,6 +213,8 @@ async function renderSkillDetail(
         onToggleStar={vi.fn()}
         starPending={false}
         onFork={vi.fn()}
+        onDownload={vi.fn()}
+        downloadPending={false}
         onUpdateSettings={vi.fn()}
         updateSettingsPending={false}
         onDelete={vi.fn()}
@@ -423,6 +425,8 @@ describe("SkillDetailPage settings", () => {
           onToggleStar={vi.fn()}
           starPending={false}
           onFork={vi.fn()}
+          onDownload={vi.fn()}
+          downloadPending={false}
           onUpdateSettings={onUpdateSettings}
           updateSettingsPending={false}
           onDelete={vi.fn()}

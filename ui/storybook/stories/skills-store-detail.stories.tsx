@@ -181,6 +181,8 @@ function SkillDetailHarness({ initialTab = "overview" as DetailTab }: { initialT
       onToggleStar={() => {}}
       starPending={false}
       onFork={() => {}}
+      onDownload={() => {}}
+      downloadPending={false}
       onUpdateSettings={() => {}}
       updateSettingsPending={false}
       onDelete={() => {}}

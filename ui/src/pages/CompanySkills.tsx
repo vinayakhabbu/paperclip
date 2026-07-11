@@ -24,6 +24,7 @@ import type {
 import { companySkillsApi } from "../api/companySkills";
 import { ApiError } from "../api/client";
 import { readZip } from "../lib/unzip";
+import { createZipArchive } from "../lib/zip";
 import { agentsApi } from "../api/agents";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -89,6 +90,7 @@ import {
   Eye,
   Filter,
   FileCode2,
+  FileDown,
   FileText,
   Folder,
   FolderOpen,
@@ -2636,6 +2638,8 @@ export function SkillDetailPage({
   onToggleStar,
   starPending,
   onFork,
+  onDownload,
+  downloadPending,
   onUpdateSettings,
   updateSettingsPending,
   onDelete,
@@ -2675,6 +2679,8 @@ export function SkillDetailPage({
   onToggleStar: () => void;
   starPending: boolean;
   onFork: () => void;
+  onDownload: () => void;
+  downloadPending: boolean;
   onUpdateSettings: (payload: Pick<CompanySkillUpdateRequest, "categories" | "sharingScope">) => void;
   updateSettingsPending: boolean;
   onDelete: () => void;
@@ -3128,6 +3134,16 @@ export function SkillDetailPage({
                 <GitFork className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">Fork</span>
                 <span className="font-medium text-foreground">{detail.forkCount}</span>
+              </button>
+              <button
+                type="button"
+                onClick={onDownload}
+                disabled={downloadPending}
+                className="inline-flex items-center gap-1.5 border-l border-border px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground disabled:opacity-50"
+                title="Download this skill as a .zip"
+              >
+                <FileDown className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">{downloadPending ? "Zipping…" : "Download"}</span>
               </button>
               <button
                 type="button"
@@ -4136,6 +4152,54 @@ export function CompanySkills() {
     },
   });
 
+  function saveZip(zipBytes: Uint8Array, filename: string) {
+    const zipBuffer = new ArrayBuffer(zipBytes.byteLength);
+    new Uint8Array(zipBuffer).set(zipBytes);
+    const url = URL.createObjectURL(new Blob([zipBuffer], { type: "application/zip" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  const downloadSkill = useMutation({
+    mutationFn: async () => {
+      if (!activeDetail) throw new Error("Select a skill first.");
+      const { rootPath, files } = await companySkillsApi.export(selectedCompanyId!, activeDetail.id);
+      saveZip(createZipArchive(files, rootPath), `${rootPath}.zip`);
+    },
+    onError: (error) => {
+      pushToast({
+        tone: "error",
+        title: "Download failed",
+        body: error instanceof Error ? error.message : "Failed to export skill.",
+      });
+    },
+  });
+
+  const downloadBulkSkills = useMutation({
+    mutationFn: async () => {
+      const cards = discoveryCards.filter((card) => bulkSkillKeys.has(card.key) && card.skillId);
+      if (cards.length === 0) throw new Error("Select at least one installed skill.");
+      const merged: Record<string, string> = {};
+      for (const card of cards) {
+        const { files } = await companySkillsApi.export(selectedCompanyId!, card.skillId!);
+        for (const [path, content] of Object.entries(files)) merged[`${card.slug}/${path}`] = content;
+      }
+      saveZip(createZipArchive(merged, "skills"), "skills.zip");
+    },
+    onError: (error) => {
+      pushToast({
+        tone: "error",
+        title: "Download failed",
+        body: error instanceof Error ? error.message : "Failed to export skills.",
+      });
+    },
+  });
+
   const toggleStar = useMutation({
     mutationFn: () => {
       if (!activeDetail) throw new Error("Select a skill first.");
@@ -5065,6 +5129,15 @@ export function CompanySkills() {
                 pending={attachAgentsMutation.isPending}
                 onSubmit={(ids) => void handleBulkAssign(ids)}
               />
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => downloadBulkSkills.mutate()}
+                disabled={downloadBulkSkills.isPending}
+              >
+                <FileDown className="h-3.5 w-3.5" />
+                {downloadBulkSkills.isPending ? "Zipping…" : "Download"}
+              </Button>
               <Button size="sm" variant="ghost" onClick={() => setBulkSkillKeys(new Set())}>
                 Clear
               </Button>
@@ -5119,6 +5192,8 @@ export function CompanySkills() {
           onToggleStar={() => toggleStar.mutate()}
           starPending={toggleStar.isPending}
           onFork={() => activeDetail && openCreateWizard(buildForkSkillDraft(activeDetail))}
+          onDownload={() => downloadSkill.mutate()}
+          downloadPending={downloadSkill.isPending}
           onUpdateSettings={(updates) => activeDetail && updateSkillSettings.mutate({ skillId: activeDetail.id, updates })}
           updateSettingsPending={updateSkillSettings.isPending}
           onDelete={openDeleteDialog}

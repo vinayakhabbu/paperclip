@@ -397,6 +397,23 @@ export function companySkillRoutes(db: Db) {
     res.json(result);
   });
 
+  router.get("/companies/:companyId/skills/:skillId/export", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    const skillId = req.params.skillId as string;
+    assertCompanyAccess(req, companyId);
+    const skill = await svc.getById(companyId, skillId);
+    if (!skill) {
+      res.status(404).json({ error: "Skill not found" });
+      return;
+    }
+    const files: Record<string, string> = {};
+    for (const entry of skill.fileInventory) {
+      const file = await svc.readFile(companyId, skillId, entry.path);
+      if (file) files[file.path] = file.content;
+    }
+    res.json({ rootPath: skill.slug, files });
+  });
+
   router.post(
     "/companies/:companyId/skills",
     validate(companySkillCreateSchema),
