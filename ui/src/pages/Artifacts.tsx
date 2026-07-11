@@ -64,8 +64,10 @@ export function artifactGroupByLabel(value: ArtifactGroupBy): string {
   return ARTIFACT_GROUP_OPTIONS.find((option) => option.value === value)?.label ?? "None";
 }
 
-function artifactKey(artifact: CompanyArtifact) {
-  return `${artifact.source}:${artifact.id}`;
+// artifact.id is already "<source>:<rawId>" (see company-artifacts.ts), so it
+// doubles as a globally-unique selection/React key on its own.
+function rawArtifactId(artifact: CompanyArtifact) {
+  return artifact.id.slice(artifact.source.length + 1);
 }
 
 /** Dispatches to the existing single-item delete for each artifact's underlying source. */
@@ -74,9 +76,9 @@ function deleteArtifact(artifact: CompanyArtifact) {
     case "document":
       return issuesApi.deleteDocument(artifact.issue.id, artifact.documentKey ?? "");
     case "work_product":
-      return issuesApi.deleteWorkProduct(artifact.id);
+      return issuesApi.deleteWorkProduct(rawArtifactId(artifact));
     case "attachment":
-      return issuesApi.deleteAttachment(artifact.id);
+      return issuesApi.deleteAttachment(rawArtifactId(artifact));
   }
 }
 
@@ -249,7 +251,7 @@ export function Artifacts() {
 
   const deleteSelected = useMutation({
     mutationFn: async () => {
-      const targets = artifacts.filter((artifact) => selectedKeys.has(artifactKey(artifact)));
+      const targets = artifacts.filter((artifact) => selectedKeys.has(artifact.id));
       await Promise.all(targets.map((artifact) => deleteArtifact(artifact)));
     },
     onSuccess: async (_data, _vars) => {
@@ -456,10 +458,10 @@ export function Artifacts() {
                 ))
               : artifacts.map((artifact) => (
                   <ArtifactCard
-                    key={artifactKey(artifact)}
+                    key={artifact.id}
                     artifact={artifact}
-                    selected={selectedKeys.has(artifactKey(artifact))}
-                    onToggleSelect={() => toggleSelected(artifactKey(artifact))}
+                    selected={selectedKeys.has(artifact.id)}
+                    onToggleSelect={() => toggleSelected(artifact.id)}
                   />
                 ))}
           </div>
