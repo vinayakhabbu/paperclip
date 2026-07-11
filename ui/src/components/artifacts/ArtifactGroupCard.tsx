@@ -1,14 +1,16 @@
-import { Layers } from "lucide-react";
+import { Check, Layers } from "lucide-react";
 import type { To } from "react-router-dom";
 import type { CompanyArtifactGroup } from "@/api/artifacts";
 import { Link } from "@/lib/router";
 import { ArtifactPreview } from "@/components/artifacts/ArtifactCard";
-import { formatDate } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 
 interface ArtifactGroupCardProps {
   group: CompanyArtifactGroup;
   /** Destination for opening this stack (preserves active filters/search). */
   to: To;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }
 
 /**
@@ -17,13 +19,33 @@ interface ArtifactGroupCardProps {
  * layers a subtle "stack" effect behind the card only when it represents more
  * than one artifact.
  */
-export function ArtifactGroupCard({ group, to }: ArtifactGroupCardProps) {
+export function ArtifactGroupCard({ group, to, selected, onToggleSelect }: ArtifactGroupCardProps) {
   const stacked = group.count > 1;
   const preview = group.previewArtifacts[0];
   const countLabel = `${group.count} artifact${group.count === 1 ? "" : "s"}`;
 
   return (
-    <div className="relative">
+    <div className="group relative">
+      {onToggleSelect ? (
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={selected}
+          aria-label={selected ? "Deselect stack" : "Select stack"}
+          data-testid="artifact-stack-select-checkbox"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onToggleSelect();
+          }}
+          className={cn(
+            "absolute left-2 top-2 z-20 flex h-5 w-5 items-center justify-center rounded border bg-background/90 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100",
+            selected && "border-primary bg-primary opacity-100",
+          )}
+        >
+          {selected ? <Check className="h-3.5 w-3.5 text-primary-foreground" aria-hidden="true" /> : null}
+        </button>
+      ) : null}
       {stacked ? (
         <>
           <div
@@ -46,7 +68,10 @@ export function ArtifactGroupCard({ group, to }: ArtifactGroupCardProps) {
         data-group-id={group.id}
         data-count={group.count}
         data-stacked={stacked ? "true" : "false"}
-        className="group relative flex flex-col overflow-hidden rounded-[8px] border border-border bg-card transition-colors hover:border-foreground/20"
+        className={cn(
+          "group relative flex flex-col overflow-hidden rounded-[8px] border bg-card transition-colors hover:border-foreground/20",
+          selected ? "border-primary ring-1 ring-primary" : "border-border",
+        )}
       >
         <div className="relative">
           {preview ? (

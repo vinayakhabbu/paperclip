@@ -87,6 +87,7 @@ export function Artifacts() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [selectedGroupIds, setSelectedGroupIds] = useState<Set<string>>(new Set());
 
   const kind = parseKind(searchParams.get("kind"));
   const query = searchParams.get("q") ?? "";
@@ -264,6 +265,44 @@ export function Artifacts() {
     },
   });
 
+  const toggleGroupSelected = useCallback((groupId: string) => {
+    setSelectedGroupIds((current) => {
+      const next = new Set(current);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  }, []);
+
+  const deleteSelectedGroups = useMutation({
+    mutationFn: async () => {
+      const targetGroups = groups.filter((group) => selectedGroupIds.has(group.id));
+      for (const group of targetGroups) {
+        const stack = await artifactsApi.list(selectedCompanyId!, {
+          groupBy,
+          groupIssueId: group.issue.id,
+          limit: group.count,
+        });
+        await Promise.all(stack.artifacts.map((artifact) => deleteArtifact(artifact)));
+      }
+    },
+    onSuccess: async () => {
+      setSelectedGroupIds(new Set());
+      await queryClient.invalidateQueries({ queryKey: ["artifacts", selectedCompanyId] });
+    },
+    onError: (error) => {
+      pushToast({
+        tone: "error",
+        title: "Delete failed",
+        body: error instanceof Error ? error.message : "Failed to delete one or more stacks.",
+      });
+    },
+  });
+
+  useEffect(() => {
+    setSelectedGroupIds(new Set());
+  }, [kind, query, groupBy, groupIssueId]);
+
   useEffect(() => {
     setSelectedKeys(new Set());
   }, [kind, query, groupBy, groupIssueId]);
@@ -407,7 +446,13 @@ export function Artifacts() {
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
             {showGroupCards
               ? groups.map((group) => (
-                  <ArtifactGroupCard key={group.id} group={group} to={stackTo(group.issue.id)} />
+                  <ArtifactGroupCard
+                    key={group.id}
+                    group={group}
+                    to={stackTo(group.issue.id)}
+                    selected={selectedGroupIds.has(group.id)}
+                    onToggleSelect={() => toggleGroupSelected(group.id)}
+                  />
                 ))
               : artifacts.map((artifact) => (
                   <ArtifactCard
@@ -446,6 +491,25 @@ export function Artifacts() {
             {deleteSelected.isPending ? "Deleting…" : "Delete"}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => setSelectedKeys(new Set())}>
+            Clear
+          </Button>
+        </div>
+      ) : selectedGroupIds.size > 0 ? (
+        <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-border bg-background px-4 py-2 shadow-lg">
+          <span className="text-sm text-foreground">
+            {selectedGroupIds.size} stack{selectedGroupIds.size === 1 ? "" : "s"} selected
+          </span>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+            onClick={() => deleteSelectedGroups.mutate()}
+            disabled={deleteSelectedGroups.isPending}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {deleteSelectedGroups.isPending ? "Deleting…" : "Delete"}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setSelectedGroupIds(new Set())}>
             Clear
           </Button>
         </div>
