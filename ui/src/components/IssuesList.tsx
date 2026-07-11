@@ -1,5 +1,5 @@
 import { startTransition, useDeferredValue, useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { accessApi } from "../api/access";
 import { useDialogActions } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
@@ -62,7 +62,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
-import { CircleDot, Plus, ArrowUpDown, Layers, Check, ChevronRight, List, ListTree, Columns3, User, Search, CircleSlash2, ChevronsDownUp, PanelTopClose, RotateCcw, ListCollapse } from "lucide-react";
+import { CircleDot, Plus, ArrowUpDown, Layers, Check, ChevronRight, List, ListTree, Columns3, User, Search, CircleSlash2, ChevronsDownUp, PanelTopClose, RotateCcw, ListCollapse, Archive, Trash2 } from "lucide-react";
 import {
   KanbanBoard,
   KANBAN_BOARD_HIGH_VOLUME_THRESHOLD,
@@ -410,6 +410,8 @@ interface IssuesListProps {
    */
   parentIssueIdForCostSummary?: string;
   enableRoutineVisibilityFilter?: boolean;
+  /** Opt-in checkbox column + floating archive/delete bar (Tasks page only). */
+  enableBulkActions?: boolean;
   hasMoreIssues?: boolean;
   isLoadingMoreIssues?: boolean;
   mutedIssueIds?: Set<string>;
@@ -417,6 +419,29 @@ interface IssuesListProps {
   onLoadMoreIssues?: () => void;
   onSearchChange?: (search: string) => void;
   onUpdateIssue: (id: string, data: Record<string, unknown>) => void;
+}
+
+function IssueBulkSelectCheckbox({ checked, onToggle }: { checked: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={checked}
+      aria-label={checked ? "Deselect task" : "Select task"}
+      data-testid="issue-row-select-checkbox"
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onToggle();
+      }}
+      className={cn(
+        "inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+        checked ? "border-primary bg-primary" : "border-border bg-background",
+      )}
+    >
+      {checked ? <Check className="h-3 w-3 text-primary-foreground" aria-hidden="true" /> : null}
+    </button>
+  );
 }
 
 function IssueSearchInput({
@@ -617,6 +642,7 @@ export function IssuesList({
   showProgressSummary = false,
   parentIssueIdForCostSummary,
   enableRoutineVisibilityFilter = false,
+  enableBulkActions = false,
   hasMoreIssues = false,
   isLoadingMoreIssues = false,
   mutedIssueIds,
@@ -694,6 +720,30 @@ export function IssuesList({
       return next;
     });
   }, [scopedKey]);
+
+  const queryClient = useQueryClient();
+  const [selectedIssueIds, setSelectedIssueIds] = useState<Set<string>>(new Set());
+  const toggleIssueSelected = useCallback((id: string) => {
+    setSelectedIssueIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const archiveSelectedIssues = useCallback(() => {
+    for (const id of selectedIssueIds) onUpdateIssue(id, { hiddenAt: new Date().toISOString() });
+    setSelectedIssueIds(new Set());
+  }, [selectedIssueIds, onUpdateIssue]);
+  const deleteSelectedIssues = useMutation({
+    mutationFn: async () => {
+      await Promise.all([...selectedIssueIds].map((id) => issuesApi.remove(id)));
+    },
+    onSuccess: async () => {
+      setSelectedIssueIds(new Set());
+      await queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(selectedCompanyId!) });
+    },
+  });
 
   useEffect(() => {
     if (!experimentalSettingsLoaded || externalObjectsEnabled || viewState.externalObjectStatuses.length === 0) return;
@@ -1822,18 +1872,32 @@ export function IssuesList({
                         )}
                         className={isMutedIssue ? "opacity-70" : undefined}
                         mobileLeading={
-                          hasChildren ? (
-                            <button type="button" data-slot="icon-button" onClick={toggleCollapse}>
-                              <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", isExpanded && "rotate-90")} />
-                            </button>
-                          ) : (
-                            <span className="inline-flex items-center" onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}>
-                              <StatusIcon status={issue.status} size="lg" blockerAttention={issue.blockerAttention} onChange={(s) => onUpdateIssue(issue.id, { status: s })} />
-                            </span>
-                          )
+                          <>
+                            {enableBulkActions ? (
+                              <IssueBulkSelectCheckbox
+                                checked={selectedIssueIds.has(issue.id)}
+                                onToggle={() => toggleIssueSelected(issue.id)}
+                              />
+                            ) : null}
+                            {hasChildren ? (
+                              <button type="button" data-slot="icon-button" onClick={toggleCollapse}>
+                                <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", isExpanded && "rotate-90")} />
+                              </button>
+                            ) : (
+                              <span className="inline-flex items-center" onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}>
+                                <StatusIcon status={issue.status} size="lg" blockerAttention={issue.blockerAttention} onChange={(s) => onUpdateIssue(issue.id, { status: s })} />
+                              </span>
+                            )}
+                          </>
                         }
                         desktopMetaLeading={(
                           <>
+                            {enableBulkActions ? (
+                              <IssueBulkSelectCheckbox
+                                checked={selectedIssueIds.has(issue.id)}
+                                onToggle={() => toggleIssueSelected(issue.id)}
+                              />
+                            ) : null}
                             {hasChildren ? (
                               <button
                                 type="button"
@@ -2010,6 +2074,34 @@ export function IssuesList({
           )}
         </>
       )}
+      {enableBulkActions && selectedIssueIds.size > 0 ? (
+        <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-border bg-background px-4 py-2 shadow-lg">
+          <span className="text-sm text-foreground">
+            {selectedIssueIds.size} task{selectedIssueIds.size === 1 ? "" : "s"} selected
+          </span>
+          <Button size="sm" variant="ghost" onClick={archiveSelectedIssues}>
+            <Archive className="h-3.5 w-3.5" />
+            Archive
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+            disabled={deleteSelectedIssues.isPending}
+            onClick={() => {
+              const count = selectedIssueIds.size;
+              if (!window.confirm(`Permanently delete ${count} task${count === 1 ? "" : "s"}? This cannot be undone.`)) return;
+              deleteSelectedIssues.mutate();
+            }}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {deleteSelectedIssues.isPending ? "Deleting…" : "Delete"}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setSelectedIssueIds(new Set())}>
+            Clear
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
