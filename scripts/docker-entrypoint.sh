@@ -5,6 +5,15 @@ set -e
 PUID=${USER_UID:-1000}
 PGID=${USER_GID:-1000}
 
+# Remapping node to 0 would make "drop to node" a no-op that leaves everything
+# running as root — defeating this script's purpose and tripping tools (e.g.
+# claude's --dangerously-skip-permissions) that refuse to run as root.
+if [ "$PUID" = "0" ] || [ "$PGID" = "0" ]; then
+    echo "docker-entrypoint.sh: USER_UID/USER_GID=0 requested, refusing to run node as root; using 1000:1000 instead" >&2
+    PUID=1000
+    PGID=1000
+fi
+
 # Runtime data root. Volumes are mounted at runtime (Railway, compose, k8s)
 # and mount over whatever the image created, so runtime directories and
 # ownership must be fixed here at boot — image-time RUN chown does not stick.
