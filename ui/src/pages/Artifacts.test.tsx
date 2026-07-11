@@ -28,6 +28,10 @@ vi.mock("../context/BreadcrumbContext", () => ({
   useBreadcrumbs: () => breadcrumbState,
 }));
 
+vi.mock("../context/ToastContext", () => ({
+  useToastActions: () => ({ pushToast: vi.fn() }),
+}));
+
 vi.mock("../api/artifacts", () => ({
   artifactsApi: artifactsApiMock,
 }));
@@ -97,6 +101,7 @@ function sampleArtifact(overrides: Partial<CompanyArtifact> = {}): CompanyArtifa
     createdByAgent: null,
     updatedAt: "2026-06-01T00:00:00.000Z",
     href: "/PAP/issues/PAP-42#document-brief",
+    documentKey: "brief",
     ...overrides,
   };
 }

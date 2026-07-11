@@ -1,11 +1,13 @@
 import { type SyntheticEvent, useEffect, useRef, useState } from "react";
-import { Download, ExternalLink, Paperclip, Play } from "lucide-react";
+import { Check, Download, ExternalLink, Paperclip, Play } from "lucide-react";
 import type { CompanyArtifact } from "@/api/artifacts";
 import { Link } from "@/lib/router";
 import { cn, formatDate } from "@/lib/utils";
 
 interface ArtifactCardProps {
   artifact: CompanyArtifact;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }
 
 /**
@@ -190,15 +192,38 @@ function SecondaryAction({
   );
 }
 
-export function ArtifactCard({ artifact }: ArtifactCardProps) {
+export function ArtifactCard({ artifact, selected, onToggleSelect }: ArtifactCardProps) {
   return (
     <Link
       to={artifact.href}
       disableIssueQuicklook
       data-testid="artifact-card"
       data-media-kind={artifact.mediaKind}
-      className="group flex flex-col overflow-hidden rounded-[8px] border border-border bg-card transition-colors hover:border-foreground/20"
+      className={cn(
+        "group relative flex flex-col overflow-hidden rounded-[8px] border bg-card transition-colors hover:border-foreground/20",
+        selected ? "border-primary ring-1 ring-primary" : "border-border",
+      )}
     >
+      {onToggleSelect ? (
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={selected}
+          aria-label={selected ? "Deselect artifact" : "Select artifact"}
+          data-testid="artifact-select-checkbox"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onToggleSelect();
+          }}
+          className={cn(
+            "absolute left-2 top-2 z-10 flex h-5 w-5 items-center justify-center rounded border bg-background/90 transition-opacity",
+            selected ? "border-primary bg-primary opacity-100" : "border-border opacity-0 group-hover:opacity-100",
+          )}
+        >
+          {selected ? <Check className="h-3.5 w-3.5 text-primary-foreground" aria-hidden="true" /> : null}
+        </button>
+      ) : null}
       <ArtifactPreview artifact={artifact} />
 
       <div className="flex flex-1 flex-col gap-1 p-3">

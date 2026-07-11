@@ -66,6 +66,7 @@ function makeArtifact(overrides: Partial<CompanyArtifact>): CompanyArtifact {
     createdByAgent: { id: "agent-1", name: "ClaudeCoder" },
     updatedAt: new Date("2026-06-04T12:00:00Z").toISOString(),
     href: "/issues/PAP-10306#attachment-art",
+    documentKey: null,
     ...overrides,
   };
 }

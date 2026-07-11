@@ -26,6 +26,7 @@ function sampleArtifact(overrides: Partial<CompanyArtifact> = {}): CompanyArtifa
     createdByAgent: { id: "agent-1", name: "ClaudeCoder" },
     updatedAt: "2026-06-01T00:00:00.000Z",
     href: "/issues/PAP-10205#work-product-wp-1",
+    documentKey: null,
     ...overrides,
   };
 }

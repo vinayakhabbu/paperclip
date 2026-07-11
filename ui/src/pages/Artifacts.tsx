@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useInfiniteQuery } from "@tanstack/react-query";
-import { ArrowLeft, Check, Layers, Package, Search, X } from "lucide-react";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, Check, Layers, Package, Search, Trash2, X } from "lucide-react";
 import type { To } from "react-router-dom";
+import type { CompanyArtifact } from "@paperclipai/shared";
 import {
   artifactsApi,
   type ArtifactGroupBy,
   type ArtifactKindFilter,
 } from "../api/artifacts";
+import { issuesApi } from "../api/issues";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { useToastActions } from "../context/ToastContext";
 import { queryKeys } from "../lib/queryKeys";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
@@ -61,10 +64,29 @@ export function artifactGroupByLabel(value: ArtifactGroupBy): string {
   return ARTIFACT_GROUP_OPTIONS.find((option) => option.value === value)?.label ?? "None";
 }
 
+function artifactKey(artifact: CompanyArtifact) {
+  return `${artifact.source}:${artifact.id}`;
+}
+
+/** Dispatches to the existing single-item delete for each artifact's underlying source. */
+function deleteArtifact(artifact: CompanyArtifact) {
+  switch (artifact.source) {
+    case "document":
+      return issuesApi.deleteDocument(artifact.issue.id, artifact.documentKey ?? "");
+    case "work_product":
+      return issuesApi.deleteWorkProduct(artifact.id);
+    case "attachment":
+      return issuesApi.deleteAttachment(artifact.id);
+  }
+}
+
 export function Artifacts() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
+  const { pushToast } = useToastActions();
+  const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
 
   const kind = parseKind(searchParams.get("kind"));
   const query = searchParams.get("q") ?? "";
@@ -215,6 +237,37 @@ export function Artifacts() {
   );
   const searching = query.length > 0;
 
+  const toggleSelected = useCallback((key: string) => {
+    setSelectedKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const deleteSelected = useMutation({
+    mutationFn: async () => {
+      const targets = artifacts.filter((artifact) => selectedKeys.has(artifactKey(artifact)));
+      await Promise.all(targets.map((artifact) => deleteArtifact(artifact)));
+    },
+    onSuccess: async (_data, _vars) => {
+      setSelectedKeys(new Set());
+      await queryClient.invalidateQueries({ queryKey: ["artifacts", selectedCompanyId] });
+    },
+    onError: (error) => {
+      pushToast({
+        tone: "error",
+        title: "Delete failed",
+        body: error instanceof Error ? error.message : "Failed to delete one or more artifacts.",
+      });
+    },
+  });
+
+  useEffect(() => {
+    setSelectedKeys(new Set());
+  }, [kind, query, groupBy, groupIssueId]);
+
   useEffect(() => {
     if (viewingSelectedStack && selectedGroup) {
       setBreadcrumbs([
@@ -357,7 +410,12 @@ export function Artifacts() {
                   <ArtifactGroupCard key={group.id} group={group} to={stackTo(group.issue.id)} />
                 ))
               : artifacts.map((artifact) => (
-                  <ArtifactCard key={`${artifact.source}:${artifact.id}`} artifact={artifact} />
+                  <ArtifactCard
+                    key={artifactKey(artifact)}
+                    artifact={artifact}
+                    selected={selectedKeys.has(artifactKey(artifact))}
+                    onToggleSelect={() => toggleSelected(artifactKey(artifact))}
+                  />
                 ))}
           </div>
           <div ref={loadMoreRef} className="flex min-h-10 items-center justify-center pb-2 text-xs text-muted-foreground">
@@ -371,6 +429,27 @@ export function Artifacts() {
           </div>
         </>
       )}
+
+      {selectedKeys.size > 0 ? (
+        <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-border bg-background px-4 py-2 shadow-lg">
+          <span className="text-sm text-foreground">
+            {selectedKeys.size} artifact{selectedKeys.size === 1 ? "" : "s"} selected
+          </span>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+            onClick={() => deleteSelected.mutate()}
+            disabled={deleteSelected.isPending}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {deleteSelected.isPending ? "Deleting…" : "Delete"}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setSelectedKeys(new Set())}>
+            Clear
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -35,6 +35,8 @@ export interface CompanyArtifact {
   createdByAgent: CompanyArtifactAgentSummary | null;
   updatedAt: string;
   href: string;
+  /** Set only when source is "document": the per-issue document key deletion needs. */
+  documentKey: string | null;
 }
 
 export interface CompanyArtifactGroup {
