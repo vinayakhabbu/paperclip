@@ -81,6 +81,7 @@ import type { MarkdownExternalReferenceMap } from "../components/MarkdownBody";
 import { IssuesList } from "../components/IssuesList";
 import { AgentIcon } from "../components/AgentIconPicker";
 import { IssueReferenceActivitySummary } from "../components/IssueReferenceActivitySummary";
+import { IssueSubtreeTimeline } from "../components/IssueSubtreeTimeline";
 import { IssueRelatedWorkPanel } from "../components/IssueRelatedWorkPanel";
 import { IssueMonitorActivityCard } from "../components/IssueMonitorActivityCard";
 import { IssueScheduledRetryCard } from "../components/IssueScheduledRetryCard";
@@ -144,6 +145,7 @@ import {
   Flag,
   FileCode2,
   Hexagon,
+  History,
   ListTree,
   MessageSquare,
   MoreHorizontal,
@@ -4204,6 +4206,12 @@ export function IssueDetail() {
             <ActivityIcon className="h-3.5 w-3.5" />
             Activity
           </TabsTrigger>
+          {childIssues.length > 0 ? (
+            <TabsTrigger value="timeline" className="gap-1.5">
+              <History className="h-3.5 w-3.5" />
+              Timeline
+            </TabsTrigger>
+          ) : null}
           <TabsTrigger value="related-work" className="gap-1.5">
             <ListTree className="h-3.5 w-3.5" />
             Related work
@@ -4316,6 +4324,17 @@ export function IssueDetail() {
               onCheckMonitorNow={() => checkIssueMonitorNow.mutate()}
               checkingMonitorNow={checkIssueMonitorNow.isPending}
               externalReferences={externalObjectsState.isEnabled ? externalObjectsState.markdownReferences : undefined}
+            />
+          ) : null}
+        </TabsContent>
+
+        <TabsContent value="timeline">
+          {detailTab === "timeline" ? (
+            <IssueSubtreeTimeline
+              issueId={issue.id}
+              companyId={issue.companyId}
+              agentMap={agentMap}
+              userLabelMap={userLabelMap}
             />
           ) : null}
         </TabsContent>
