@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Factory Control Room</title>
+<!-- Served by factory-gateway.mjs at GET /ui. Zero dependencies: polls the
+     gateway's own JSON endpoints (same origin) every 3s. Human view only —
+     agents keep using the JSON API per the factory-tools skill. -->
+<style>
+  :root { --bg:#0a0e12; --card:#11161c; --line:#232d37; --text:#dfe7ee; --dim:#8494a3; --cyan:#19cfc3; --amber:#f0b44a; --red:#e5484d; --green:#42c985; }
+  * { box-sizing:border-box; margin:0 }
+  body { background:var(--bg); color:var(--text); font:14px/1.45 ui-sans-serif,system-ui,sans-serif; padding:18px }
+  header { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:16px }
+  h1 { font-size:15px; letter-spacing:.1em; text-transform:uppercase }
+  h1 span { color:var(--cyan) }
+  .spacer { flex:1 }
+  button { background:var(--card); color:var(--text); border:1px solid var(--line); padding:6px 12px; cursor:pointer; font:inherit; font-size:13px }
+  button:hover { border-color:var(--cyan) }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(360px,1fr)); gap:14px }
+  section { background:var(--card); border:1px solid var(--line); padding:14px; overflow-x:auto }
+  section.wide { grid-column:1/-1 }
+  h2 { font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--dim); margin-bottom:10px }
+  table { width:100%; border-collapse:collapse; font-size:13px; white-space:nowrap }
+  td,th { text-align:left; padding:5px 10px 5px 0; border-bottom:1px solid var(--line) }
+  th { color:var(--dim); font-weight:500; font-size:10px; text-transform:uppercase; letter-spacing:.1em }
+  tr:last-child td { border-bottom:none }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:7px; vertical-align:baseline }
+  .bar { height:5px; background:var(--line); margin-top:5px; min-width:90px } .bar i { display:block; height:100%; background:var(--cyan) }
+  .badge { font-size:10px; padding:1px 6px; border:1px solid currentColor; margin-left:6px }
+  .amber { color:var(--amber) } .red { color:var(--red) } .green { color:var(--green) } .dim { color:var(--dim) }
+  #events { list-style:none; font-size:12px; max-height:300px; overflow-y:auto }
+  #events li { padding:3px 0; border-bottom:1px solid var(--line) }
+  #plan:empty { display:none }
+  .zap { padding:2px 8px; font-size:12px }
+</style>
+
+<header>
+  <h1>Factory <span>Control Room</span></h1>
+  <span id="sim" class="badge dim">…</span>
+  <span id="err" class="red"></span>
+  <div class="spacer"></div>
+  <button id="solveBtn" title="POST /schedule/solve — deterministic plan proposal">Run solver</button>
+  <button id="simBtn">…</button>
+</header>
+
+<div class="grid">
+  <section><h2>Machines</h2><table id="machines"></table></section>
+  <section><h2>Inventory</h2><table id="inventory"></table></section>
+  <section class="wide"><h2>Orders</h2><table id="orders"></table></section>
+  <section class="wide" id="plan"></section>
+  <section><h2>Planned jobs</h2><table id="jobs"></table></section>
+  <section><h2>Events</h2><ul id="events"></ul></section>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const j = async (path, opts) => (await fetch(path, opts)).json();
+const t = (iso) => (iso ? esc(String(iso).slice(5, 16).replace("T", " ")) : "—");
+let simOn = false;
+
+function statusColor(s) { return s === "running" ? "var(--green)" : s === "fault" ? "var(--red)" : "var(--amber)"; }
+
+async function refresh() {
+  try {
+    const [root, machines, orders, jobs, inventory, events] = await Promise.all([
+      j("/"), j("/machines"), j("/orders"), j("/jobs"), j("/inventory"), j("/events"),
+    ]);
+    simOn = root.autoEvents;
+    $("sim").textContent = simOn ? "demo events ON" : "demo events off";
+    $("sim").className = "badge " + (simOn ? "green" : "dim");
+    $("simBtn").textContent = simOn ? "Stop demo events" : "Start demo events";
+    $("err").textContent = "";
+
+    $("machines").innerHTML = "<tr><th></th><th>Machine</th><th>Status</th><th>Units</th><th></th></tr>" +
+      machines.map((m) => `<tr>
+        <td><span class="dot" style="background:${statusColor(m.status)}"></span>${esc(m.id)}</td>
+        <td class="dim">${esc(m.name)}</td>
+        <td>${esc(m.status)}${m.faultCode ? ` <span class="badge red">${esc(m.faultCode)}</span>` : ""}</td>
+        <td class="dim">${m.unitsProduced}</td>
+        <td><button class="zap" onclick="inject('${esc(m.id)}')" title="inject a demo fault">&#9889;</button></td>
+      </tr>`).join("");
+
+    const today = new Date().toISOString().slice(0, 10);
+    $("orders").innerHTML = "<tr><th>Order</th><th>Product</th><th>Customer</th><th>Progress</th><th>Due</th><th>Status</th></tr>" +
+      orders.map((o) => {
+        const late = o.status !== "done" && o.due < today;
+        return `<tr>
+          <td>${esc(o.id)}${o.expedite ? '<span class="badge amber">HOT</span>' : ""}${late ? '<span class="badge red">LATE</span>' : ""}</td>
+          <td class="dim">${esc(o.product)}</td>
+          <td class="dim">${esc(o.customer)}</td>
+          <td>${o.produced}/${o.qty}<div class="bar"><i style="width:${Math.min(100, (100 * o.produced) / o.qty)}%"></i></div></td>
+          <td class="dim">${esc(o.due)}</td>
+          <td class="${o.status === "done" ? "green" : ""}">${esc(o.status)}</td>
+        </tr>`;
+      }).join("");
+
+    $("jobs").innerHTML = jobs.length === 0 ? '<tr><td class="dim">none planned</td></tr>'
+      : "<tr><th>Job</th><th>Order</th><th>Line</th><th>Window</th><th>Status</th></tr>" +
+        jobs.map((jb) => `<tr><td>${esc(jb.id)}</td><td>${esc(jb.orderId)}</td><td class="dim">${esc(jb.lineId)}</td><td class="dim">${t(jb.plannedStart)} &rarr; ${t(jb.plannedEnd)}</td><td>${esc(jb.status)}</td></tr>`).join("");
+
+    $("inventory").innerHTML = "<tr><th>SKU</th><th>On hand</th><th>Reserved</th><th>Available</th><th>Reorder at</th></tr>" +
+      inventory.map((i) => {
+        const low = i.qty <= i.reorderPoint;
+        return `<tr><td>${esc(i.sku)}${low ? '<span class="badge amber">LOW</span>' : ""}</td><td>${i.qty}</td><td class="dim">${i.reserved}</td><td>${i.qty - i.reserved}</td><td class="dim">${i.reorderPoint}</td></tr>`;
+      }).join("");
+
+    $("events").innerHTML = events.slice(0, 30).map((e) =>
+      `<li><span class="dim">${esc(String(e.at).slice(11, 19))}</span> <b>${esc(e.kind)}</b> ${esc(e.message)}</li>`).join("");
+  } catch {
+    $("err").textContent = "gateway unreachable";
+  }
+}
+
+$("simBtn").onclick = async () => { await j(simOn ? "/sim/stop" : "/sim/start", { method: "POST" }); refresh(); };
+
+window.inject = async (id) => { await j(`/machines/${id}/fault`, { method: "POST" }); refresh(); };
+
+$("solveBtn").onclick = async () => {
+  const r = await j("/schedule/solve", { method: "POST" });
+  $("plan").innerHTML = `<h2>Solver proposal <span class="dim">(${esc(r.method)} @ ${t(r.solvedAt)})</span></h2>` +
+    "<table><tr><th>Order</th><th>Line</th><th>Qty</th><th>Window</th><th>Rationale</th></tr>" +
+    r.plan.map((p) => `<tr><td>${esc(p.orderId)}</td><td>${esc(p.lineId)}</td><td>${p.qty}</td><td class="dim">${t(p.plannedStart)} &rarr; ${t(p.plannedEnd)}</td><td class="dim">${esc(p.rationale)}</td></tr>`).join("") +
+    "</table>" +
+    (r.conflicts.length === 0 ? '<p class="green" style="margin-top:8px">no conflicts</p>'
+      : '<h2 style="margin-top:12px" class="red">Conflicts</h2><ul style="list-style:none;font-size:12px">' +
+        r.conflicts.map((c) => `<li class="amber">&#9888; ${esc(JSON.stringify(c))}</li>`).join("") + "</ul>");
+};
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</html>

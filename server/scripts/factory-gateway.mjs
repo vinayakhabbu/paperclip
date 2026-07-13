@@ -16,6 +16,7 @@
 //   COMPANY_ID           target company id (required to push events / install skill)
 //   DIRECTOR_AGENT_ID    if set, new fault issues are auto-assigned to it
 //   GATEWAY_PUBLIC_URL   URL agents should use to reach this gateway (goes in issue bodies)
+//   CONNECTOR_ORDERS_FILE  order export file (.csv or .json) ingested read-only when it changes
 //   FACTORY_DATABASE_URL Postgres for the ontology tables (falls back to DATABASE_URL)
 //   FACTORY_STATE_FILE   JSON snapshot path (local alternative to Postgres)
 //   PORT                 gateway port (default 8090)
@@ -270,12 +271,16 @@ async function createOrder({ product, qty, due, customer, expedite }, deps = { f
   state.orders.push(order);
   logEvent("order_received", `${order.id}: ${qty}x ${productRow.name} due ${due}${order.expedite ? " (EXPEDITED)" : ""}`, { orderId: order.id });
 
-  if (order.expedite) {
-    await pushIssue({
-      title: `[HOT JOB] Expedited order ${order.id} — ${qty}x ${productRow.name} due ${due}`,
-      priority: "critical",
-      sourceRef: `sim://order/${order.id}/expedite`,
-      body: [
+  if (order.expedite) await pushHotJob(order, productRow, deps);
+  return order;
+}
+
+async function pushHotJob(order, productRow, deps = { fetch }) {
+  await pushIssue({
+    title: `[HOT JOB] Expedited order ${order.id} — ${order.qty}x ${productRow.name} due ${order.due}`,
+    priority: "critical",
+    sourceRef: `sim://order/${order.id}/expedite`,
+    body: [
         `Expedited customer order received by the factory gateway. Insert it into the current schedule without breaking existing commitments.`,
         ``,
         `Order: ${JSON.stringify(order)}`,
@@ -296,11 +301,76 @@ async function createOrder({ product, qty, due, customer, expedite }, deps = { f
         `- POST ${PUBLIC_URL}/inventory/:sku/reserve {"qty": n, "orderId": "${order.id}"}`,
         `- POST ${PUBLIC_URL}/jobs — use plannedStart/plannedEnd from the solver output verbatim`,
         ``,
-        `Schedule changes affecting existing due-date commitments need board approval per governance.`,
-      ].join("\n"),
-    }, deps);
+      `Schedule changes affecting existing due-date commitments need board approval per governance.`,
+    ].join("\n"),
+  }, deps);
+}
+
+// ── Connector #1: orders (Phase A, read-only) ────────────────────────────────
+// First real-system seam. Point CONNECTOR_ORDERS_FILE at an ERP/MES order
+// export (.json array, or .csv with headers id,product,qty,due,customer,expedite);
+// the gateway re-reads it whenever it changes and upserts orders by id. The
+// file is never written back — read-only, exactly Phase A. A future REST/MQTT
+// connector calls ingestOrders() with the same row shape; nothing else changes.
+const ORDERS_FILE = process.env.CONNECTOR_ORDERS_FILE;
+let ordersFileMtime = 0;
+
+function parseCsv(text) {
+  // ponytail: naive CSV (no quoted commas) — fine for exports of this shape;
+  // swap for a real parser if fields ever contain commas.
+  const [header, ...rows] = text.trim().split(/\r?\n/);
+  const cols = header.split(",").map((s) => s.trim());
+  return rows.filter(Boolean).map((row) => {
+    const cells = row.split(",").map((s) => s.trim());
+    return Object.fromEntries(cols.map((c, i) => [c, cells[i]]));
+  });
+}
+
+async function ingestOrders(rows, deps = { fetch }) {
+  let added = 0, updated = 0, skipped = 0;
+  for (const row of rows) {
+    const productRow = state.products.find((p) => p.id === row.product);
+    const qty = Number(row.qty);
+    const expedite = row.expedite === true || ["true", "1", "yes"].includes(String(row.expedite).toLowerCase());
+    if (!row.id || !productRow || !Number.isFinite(qty) || qty <= 0 || !row.due) {
+      skipped++;
+      continue;
+    }
+    const existing = state.orders.find((o) => o.id === row.id);
+    if (existing) {
+      const wasExpedite = existing.expedite;
+      Object.assign(existing, { qty, due: row.due, expedite, customer: row.customer ?? existing.customer });
+      updated++;
+      // Flipped to expedited upstream → hot job (sourceRef dedups re-pushes).
+      if (expedite && !wasExpedite) await pushHotJob(existing, productRow, deps);
+    } else {
+      const order = {
+        id: row.id, product: row.product, customer: row.customer ?? "Unknown customer",
+        qty, produced: 0, due: row.due, expedite, status: "queued", line: null,
+      };
+      state.orders.push(order);
+      added++;
+      logEvent("order_received", `${order.id}: ${qty}x ${productRow.name} due ${order.due}${expedite ? " (EXPEDITED)" : ""} [connector]`, { orderId: order.id });
+      if (expedite) await pushHotJob(order, productRow, deps);
+    }
   }
-  return order;
+  return { added, updated, skipped };
+}
+
+async function pollOrdersFile(deps = { fetch }) {
+  if (!ORDERS_FILE) return;
+  let mtime;
+  try { mtime = fs.statSync(ORDERS_FILE).mtimeMs; } catch { return; } // absent file = connector idle
+  if (mtime === ordersFileMtime) return;
+  ordersFileMtime = mtime;
+  try {
+    const text = fs.readFileSync(ORDERS_FILE, "utf8");
+    const rows = ORDERS_FILE.endsWith(".json") ? JSON.parse(text) : parseCsv(text);
+    const { added, updated, skipped } = await ingestOrders(rows, deps);
+    logEvent("connector", `orders connector: ${added} new, ${updated} updated${skipped ? `, ${skipped} skipped` : ""}`);
+  } catch (err) {
+    logEvent("connector_error", `orders connector failed: ${err.message ?? err}`);
+  }
 }
 
 // ── Deterministic scheduler ──────────────────────────────────────────────────
@@ -372,6 +442,7 @@ function solveSchedule(now = new Date()) {
 
 // ── Sim tick ─────────────────────────────────────────────────────────────────
 async function tick(deps = { fetch, random: Math.random }) {
+  await pollOrdersFile(deps);
   for (const machine of state.machines) {
     if (machine.status !== "running") continue;
 
@@ -445,6 +516,7 @@ function readBody(req) {
 
 async function serve() {
   await initDb();
+  await pollOrdersFile();
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://x`);
     const parts = url.pathname.split("/").filter(Boolean);
@@ -454,6 +526,7 @@ async function serve() {
           service: "factory-gateway",
           autoEvents,
           endpoints: [
+            "GET /ui  (human control room)",
             "GET /machines", "GET /machines/:id", "GET /orders", "GET /orders/:id",
             "GET /products", "GET /lines", "GET /jobs", "GET /inventory", "GET /events",
             "POST /orders {product, qty, due, customer?, expedite?}",
@@ -469,6 +542,10 @@ async function serve() {
         autoEvents = parts[1] === "start";
         logEvent("sim", `auto events ${autoEvents ? "started" : "stopped"}`);
         return json(res, 200, { autoEvents });
+      }
+      if (req.method === "GET" && parts[0] === "ui") {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        return res.end(fs.readFileSync(new URL("./factory-control-room.html", import.meta.url)));
       }
       if (req.method === "GET" && parts[0] === "machines" && !parts[1]) return json(res, 200, state.machines);
       if (req.method === "GET" && parts[0] === "machines" && parts[1]) {
@@ -564,6 +641,8 @@ async function serve() {
     console.log(`factory-gateway listening on :${PORT} (tick ${TICK_MS}ms, fault prob ${FAULT_PROB}, auto events ${autoEvents ? "ON" : "OFF — POST /sim/start to begin demo"})`);
     console.log(`pushing events to ${TOKEN && COMPANY_ID ? `${BASE} company ${COMPANY_ID}` : "(disabled — set PAPERCLIP_TOKEN + COMPANY_ID)"}`);
     console.log(`ontology storage: ${db ? "Postgres (factory_* tables)" : STATE_FILE ? `JSON snapshot ${STATE_FILE}` : "memory only (set FACTORY_DATABASE_URL for Postgres)"}`);
+    console.log(`control room: ${PUBLIC_URL}/ui`);
+    if (ORDERS_FILE) console.log(`orders connector: watching ${ORDERS_FILE} (read-only)`);
   });
   setInterval(() => void tick().catch((err) => console.error("tick failed:", err)), TICK_MS);
 }
@@ -659,6 +738,19 @@ async function check() {
   assert.equal(s1.plan[0].orderId, order.id); // expedited order jumps the queue
   assert.ok(s1.plan.every((j) => j.plannedStart && j.plannedEnd && j.lineId));
   assert.ok(s1.conflicts.some((c) => c.type === "material_short" && c.sku === "CARTONS")); // only 5 available
+  // connector: CSV parse + read-only upsert ingest
+  const csvRows = parseCsv("id,product,qty,due,customer,expedite\r\nSO-9001,widget-a,50,2026-08-05,Connector Co,true\n");
+  assert.deepEqual(csvRows, [{ id: "SO-9001", product: "widget-a", qty: "50", due: "2026-08-05", customer: "Connector Co", expedite: "true" }]);
+  calls.length = 0;
+  let ingest = await ingestOrders(csvRows, { fetch: fakeFetch });
+  assert.deepEqual(ingest, { added: 1, updated: 0, skipped: 0 });
+  assert.ok(state.orders.some((o) => o.id === "SO-9001" && o.expedite));
+  if (TOKEN && COMPANY_ID) assert.ok(calls[0].body.title.includes("SO-9001"));
+  ingest = await ingestOrders(csvRows, { fetch: fakeFetch }); // idempotent re-read
+  assert.deepEqual(ingest, { added: 0, updated: 1, skipped: 0 });
+  assert.equal(state.orders.filter((o) => o.id === "SO-9001").length, 1);
+  ingest = await ingestOrders([{ id: "SO-9002", product: "nope", qty: "5", due: "2026-08-05" }], { fetch: fakeFetch });
+  assert.deepEqual(ingest, { added: 0, updated: 0, skipped: 1 });
   console.log("self-check ok");
 }
 
