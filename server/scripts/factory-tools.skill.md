@@ -28,6 +28,7 @@ All reads are plain HTTP GET returning JSON. Use curl.
 | Planned schedule entries (jobs) | `curl -s __GATEWAY_URL__/jobs` |
 | Inventory: on hand, reserved, reorder points | `curl -s __GATEWAY_URL__/inventory` |
 | Recent factory event log (newest first) | `curl -s __GATEWAY_URL__/events` |
+| Compute a schedule proposal (deterministic, read-only) | `curl -s -X POST __GATEWAY_URL__/schedule/solve` |
 | Mark a machine repaired | `curl -s -X POST __GATEWAY_URL__/machines/PKG-02/repair` |
 | Reserve material for an order | `curl -s -X POST __GATEWAY_URL__/inventory/CARTONS/reserve -d '{"qty":120,"orderId":"SO-2001"}'` |
 | Add a planned schedule entry | `curl -s -X POST __GATEWAY_URL__/jobs -d '{"orderId":"SO-2001","lineId":"Line A","plannedStart":"2026-08-01T06:00:00Z","plannedEnd":"2026-08-01T14:00:00Z","note":"hot job insertion"}'` |
@@ -37,7 +38,7 @@ All reads are plain HTTP GET returning JSON. Use curl.
 1. **Read before you reason.** Fetch the machine, its line's orders, and recent events before writing any diagnosis or impact assessment. Quote actual values (fault code, units produced, qty remaining, due dates) in your comments.
 2. **Writes are protected actions.** Only POST `/machines/:id/repair`, `/inventory/:sku/reserve`, or `/jobs` after the corresponding work is validated and, where required by governance, approved. Never call them to "test". Reserving material and planning jobs for a hot job that displaces existing due-date commitments needs board approval first.
 3. **Available stock = `qty − reserved`.** Never reserve more than available; if stock is insufficient, raise it as a finding, don't force it.
-4. **Schedules come from validation, not vibes.** A `/jobs` entry must cite: material reserved (or available), line capable (`/lines`), line healthy (`/machines`), no conflicting quality/safety constraints. Put that evidence in the issue before posting the job.
+4. **Schedules come from the solver, never from you.** Do not invent `plannedStart`/`plannedEnd`. Run `POST /schedule/solve`, quote its `plan` and `conflicts` in the issue as evidence, resolve conflicts (reserve material, escalate lateness, repair lines), and — after required approvals — `POST /jobs` using the solver's times **verbatim**. Your job is to prepare the input and explain the output, not to compute the schedule.
 5. **Cite evidence.** When you use gateway data in a decision, paste the relevant JSON fragment into your issue comment so the audit trail shows what you saw.
 
 ## Example

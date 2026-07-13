@@ -289,15 +289,85 @@ async function createOrder({ product, qty, due, customer, expedite }, deps = { f
         `- GET ${PUBLIC_URL}/machines — line health right now`,
         `- GET ${PUBLIC_URL}/jobs — already-planned schedule entries`,
         ``,
+        `Compute the schedule (NEVER invent start/end times yourself):`,
+        `- POST ${PUBLIC_URL}/schedule/solve — deterministic plan + conflicts; quote its output as evidence`,
+        ``,
         `Bounded writes (only after validation and required approvals):`,
         `- POST ${PUBLIC_URL}/inventory/:sku/reserve {"qty": n, "orderId": "${order.id}"}`,
-        `- POST ${PUBLIC_URL}/jobs {"orderId": "${order.id}", "lineId": "...", "plannedStart": "...", "plannedEnd": "...", "note": "..."}`,
+        `- POST ${PUBLIC_URL}/jobs — use plannedStart/plannedEnd from the solver output verbatim`,
         ``,
         `Schedule changes affecting existing due-date commitments need board approval per governance.`,
       ].join("\n"),
     }, deps);
   }
   return order;
+}
+
+// ── Deterministic scheduler ──────────────────────────────────────────────────
+// The LLM never invents a schedule. Agents call POST /schedule/solve; the
+// gateway computes the plan deterministically; the agent explains it and —
+// after approval — commits it via POST /jobs using the solver's times
+// verbatim. Greedy list scheduling: expedite first, then earliest due date;
+// each order goes to the capable line that finishes it soonest, at the line's
+// effective rate (nominal rate scaled by fraction of running machines).
+// ponytail: greedy EDF, no preemption/changeovers/shifts; swap in OR-Tools
+// CP-SAT behind this same endpoint when constraints outgrow it.
+function solveSchedule(now = new Date()) {
+  const conflicts = [];
+  const open = state.orders
+    .filter((o) => o.status !== "done" && o.produced < o.qty)
+    .sort((a, b) =>
+      (Number(b.expedite) - Number(a.expedite)) || a.due.localeCompare(b.due) || a.id.localeCompare(b.id));
+
+  const lineInfo = state.lines.map((line) => {
+    const machines = state.machines.filter((m) => line.machines.includes(m.id));
+    const running = machines.filter((m) => m.status === "running").length;
+    const rate = machines.length ? (line.ratePerHour * running) / machines.length : 0;
+    return { line, rate, cursor: now.getTime() };
+  });
+
+  // Material feasibility in plan order: each order draws down projected stock.
+  const stock = Object.fromEntries(state.inventory.map((i) => [i.sku, i.qty - i.reserved]));
+
+  const plan = [];
+  for (const order of open) {
+    const remaining = order.qty - order.produced;
+    const capable = lineInfo.filter((li) => li.line.products.includes(order.product) && li.rate > 0);
+    if (capable.length === 0) {
+      conflicts.push({ type: "no_capable_line", orderId: order.id, product: order.product });
+      continue;
+    }
+    for (const { sku, qtyPer } of state.products.find((p) => p.id === order.product)?.bom ?? []) {
+      const need = remaining * qtyPer;
+      if ((stock[sku] ?? 0) < need) {
+        conflicts.push({ type: "material_short", orderId: order.id, sku, need, available: Math.max(0, stock[sku] ?? 0) });
+      }
+      stock[sku] = (stock[sku] ?? 0) - need;
+    }
+    const best = capable.reduce((a, b) =>
+      (b.cursor + (remaining / b.rate) * 3_600_000 < a.cursor + (remaining / a.rate) * 3_600_000 ? b : a));
+    const start = new Date(best.cursor);
+    const end = new Date(best.cursor + (remaining / best.rate) * 3_600_000);
+    best.cursor = end.getTime();
+    if (end.toISOString().slice(0, 10) > order.due) {
+      conflicts.push({ type: "late", orderId: order.id, due: order.due, plannedEnd: end.toISOString() });
+    }
+    plan.push({
+      orderId: order.id,
+      lineId: best.line.id,
+      qty: remaining,
+      plannedStart: start.toISOString(),
+      plannedEnd: end.toISOString(),
+      rationale: `${remaining} units @ ${best.rate}/h on ${best.line.id} (expedite=${order.expedite}, due ${order.due})`,
+    });
+  }
+  return {
+    solvedAt: now.toISOString(),
+    method: "greedy-edf",
+    plan,
+    conflicts,
+    existingPlannedJobs: state.jobs.filter((j) => j.status === "planned").map((j) => j.id),
+  };
 }
 
 // ── Sim tick ─────────────────────────────────────────────────────────────────
@@ -387,6 +457,7 @@ async function serve() {
             "GET /machines", "GET /machines/:id", "GET /orders", "GET /orders/:id",
             "GET /products", "GET /lines", "GET /jobs", "GET /inventory", "GET /events",
             "POST /orders {product, qty, due, customer?, expedite?}",
+            "POST /schedule/solve  (deterministic plan proposal — read-only)",
             "POST /jobs {orderId, lineId, plannedStart, plannedEnd, note?}",
             "POST /inventory/:sku/reserve {qty, orderId?}",
             "POST /machines/:id/repair", "POST /machines/:id/fault",
@@ -415,6 +486,9 @@ async function serve() {
       if (req.method === "GET" && parts[0] === "inventory") return json(res, 200, state.inventory);
       if (req.method === "GET" && parts[0] === "events") return json(res, 200, state.events.slice(0, 50));
 
+      if (req.method === "POST" && parts[0] === "schedule" && parts[1] === "solve") {
+        return json(res, 200, solveSchedule());
+      }
       if (req.method === "POST" && parts[0] === "orders") {
         try {
           const order = await createOrder(await readBody(req));
@@ -575,6 +649,16 @@ async function check() {
   const cartons = state.inventory.find((i) => i.sku === "CARTONS");
   cartons.reserved = cartons.qty - 5;
   assert.ok(cartons.qty - cartons.reserved === 5);
+  // solver: deterministic, expedite-first, pure (no state mutation), flags shortages
+  const fixed = new Date("2026-07-13T00:00:00Z");
+  const snapshot = JSON.stringify(state);
+  const s1 = solveSchedule(fixed);
+  const s2 = solveSchedule(fixed);
+  assert.deepEqual(s1, s2);
+  assert.equal(JSON.stringify(state), snapshot);
+  assert.equal(s1.plan[0].orderId, order.id); // expedited order jumps the queue
+  assert.ok(s1.plan.every((j) => j.plannedStart && j.plannedEnd && j.lineId));
+  assert.ok(s1.conflicts.some((c) => c.type === "material_short" && c.sku === "CARTONS")); // only 5 available
   console.log("self-check ok");
 }
 
