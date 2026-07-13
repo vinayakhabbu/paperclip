@@ -16,12 +16,15 @@
 //   COMPANY_ID           target company id (required to push events / install skill)
 //   DIRECTOR_AGENT_ID    if set, new fault issues are auto-assigned to it
 //   GATEWAY_PUBLIC_URL   URL agents should use to reach this gateway (goes in issue bodies)
+//   FACTORY_DATABASE_URL Postgres for the ontology tables (falls back to DATABASE_URL)
+//   FACTORY_STATE_FILE   JSON snapshot path (local alternative to Postgres)
 //   PORT                 gateway port (default 8090)
 //   TICK_MS              sim tick interval (default 20000)
 //   FAULT_PROB           per-machine fault probability per tick (default 0.02)
 
 import http from "node:http";
 import assert from "node:assert";
+import fs from "node:fs";
 
 const PORT = Number(process.env.PORT ?? 8090);
 const TICK_MS = Number(process.env.TICK_MS ?? 20_000);
@@ -44,7 +47,19 @@ const FAULTS = {
   amr: [["E-301", "path blocked"], ["E-305", "battery critical"]],
 };
 
+// Ontology-lite: products (with BOM), orders, lines, jobs, inventory,
+// machines. Relationships are plain foreign keys (order.product → products.id,
+// job.orderId/lineId, line.machines). This in-memory shape + the read API
+// below IS the v1 operational data layer; swap the storage for Postgres when
+// real ERP/MES data starts flowing — the endpoints are the stable contract.
 const state = {
+  products: [
+    { id: "widget-a", name: "Widget A", bom: [{ sku: "ALU-BAR", qtyPer: 1 }, { sku: "FASTENERS", qtyPer: 4 }, { sku: "CARTONS", qtyPer: 1 }] },
+    { id: "widget-b", name: "Widget B", bom: [{ sku: "ALU-BAR", qtyPer: 2 }, { sku: "FASTENERS", qtyPer: 6 }, { sku: "CARTONS", qtyPer: 1 }] },
+  ],
+  lines: [
+    { id: "Line A", products: ["widget-a", "widget-b"], ratePerHour: 60, machines: ["CNC-01", "ASM-01", "PKG-02"] },
+  ],
   machines: [
     { id: "CNC-01", name: "CNC Mill 1", type: "cnc", line: "Line A", status: "running", faultCode: null, faultSince: null, unitsProduced: 0, consumes: "ALU-BAR" },
     { id: "ASM-01", name: "Assembly Cell 1", type: "assembly", line: "Line A", status: "running", faultCode: null, faultSince: null, unitsProduced: 0, consumes: "FASTENERS" },
@@ -52,26 +67,126 @@ const state = {
     { id: "AMR-01", name: "Material Transport AMR", type: "amr", line: "Logistics", status: "running", faultCode: null, faultSince: null, unitsProduced: 0, consumes: null },
   ],
   orders: [
-    { id: "SO-1042", product: "Widget A", qty: 500, produced: 180, due: isoIn(1), status: "in_progress", line: "Line A" },
-    { id: "SO-1043", product: "Widget A", qty: 300, produced: 40, due: isoIn(1), status: "in_progress", line: "Line A" },
-    { id: "SO-1050", product: "Widget B", qty: 800, produced: 0, due: isoIn(4), status: "queued", line: "Line A" },
+    { id: "SO-1042", product: "widget-a", customer: "OEM North", qty: 500, produced: 180, due: isoIn(1), expedite: false, status: "in_progress", line: "Line A" },
+    { id: "SO-1043", product: "widget-a", customer: "OEM North", qty: 300, produced: 40, due: isoIn(1), expedite: false, status: "in_progress", line: "Line A" },
+    { id: "SO-1050", product: "widget-b", customer: "Distributor East", qty: 800, produced: 0, due: isoIn(4), expedite: false, status: "queued", line: "Line A" },
   ],
+  // Schedule entries. Written by the Production Supervisor (or a solver later)
+  // via POST /jobs after validation + approval; the sim treats them as data.
+  jobs: [],
   inventory: [
-    { sku: "ALU-BAR", name: "Aluminium bar stock", qty: 400, reorderPoint: 120 },
-    { sku: "FASTENERS", name: "Fastener kit", qty: 900, reorderPoint: 250 },
-    { sku: "CARTONS", name: "Shipping cartons", qty: 350, reorderPoint: 100 },
+    { sku: "ALU-BAR", name: "Aluminium bar stock", qty: 400, reserved: 0, reorderPoint: 120 },
+    { sku: "FASTENERS", name: "Fastener kit", qty: 900, reserved: 0, reorderPoint: 250 },
+    { sku: "CARTONS", name: "Shipping cartons", qty: 350, reserved: 0, reorderPoint: 100 },
   ],
   events: [], // ring buffer, newest first
+  nextOrderSeq: 2001,
+  nextJobSeq: 1,
 };
 
 function isoIn(days) {
   return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
 }
 
+// ── Persistence ──────────────────────────────────────────────────────────────
+// Two options, both optional:
+//  - FACTORY_DATABASE_URL (or DATABASE_URL): Postgres. One plain table per
+//    entity (factory_orders, factory_inventory, ...), row per record with a
+//    jsonb data column — queryable (`data->>'status'`), durable across
+//    redeploys, and the natural home for the solver later. The sim keeps its
+//    in-memory working set and syncs the tables ~500ms after each mutation.
+//    ponytail: full rewrite of all (~15) entity rows per sync; promote hot
+//    fields to real columns + targeted updates when a solver needs indexes.
+//  - FACTORY_STATE_FILE: JSON snapshot on disk (local dev convenience).
+// Neither set → memory only, resets on restart.
+const STATE_FILE = process.env.FACTORY_STATE_FILE;
+const DB_URL = process.env.FACTORY_DATABASE_URL ?? process.env.DATABASE_URL;
+const ENTITY_TABLES = [
+  ["factory_products", "products", "id"],
+  ["factory_lines", "lines", "id"],
+  ["factory_machines", "machines", "id"],
+  ["factory_orders", "orders", "id"],
+  ["factory_jobs", "jobs", "id"],
+  ["factory_inventory", "inventory", "sku"],
+];
+let db = null;
+
+async function initDb() {
+  if (!DB_URL) return;
+  const { createRequire } = await import("node:module");
+  // postgres-js is a dep of @paperclipai/db; resolve through that package so
+  // the gateway itself stays dependency-free.
+  const requireFromDb = createRequire(new URL("../../packages/db/package.json", import.meta.url));
+  const postgres = requireFromDb("postgres");
+  db = postgres(DB_URL, { max: 2, onnotice: () => {} });
+
+  for (const [table] of ENTITY_TABLES) {
+    await db.unsafe(`create table if not exists ${table} (id text primary key, data jsonb not null)`);
+  }
+  await db.unsafe(`create table if not exists factory_events (seq bigserial primary key, at timestamptz not null default now(), data jsonb not null)`);
+  await db.unsafe(`create table if not exists factory_meta (key text primary key, value jsonb not null)`);
+
+  const parseRow = (value) => (typeof value === "string" ? JSON.parse(value) : value);
+  const seeded = await db`select value from factory_meta where key = 'seeded'`;
+  if (seeded.length > 0) {
+    // Restore: DB is the source of truth after first boot. To reseed from the
+    // code defaults, drop the factory_* tables and restart.
+    for (const [table, key] of ENTITY_TABLES) {
+      const rows = await db`select data from ${db(table)}`;
+      state[key] = rows.map((row) => parseRow(row.data));
+    }
+    const meta = await db`select key, value from factory_meta`;
+    for (const row of meta) {
+      if (row.key === "nextOrderSeq") state.nextOrderSeq = Number(parseRow(row.value));
+      if (row.key === "nextJobSeq") state.nextJobSeq = Number(parseRow(row.value));
+    }
+    const events = await db`select data from factory_events order by seq desc limit 200`;
+    state.events = events.map((row) => parseRow(row.data));
+    console.log(`ontology restored from Postgres (${state.orders.length} orders, ${state.jobs.length} jobs)`);
+  } else {
+    await syncDb();
+    await db`insert into factory_meta (key, value) values ('seeded', 'true'::jsonb) on conflict (key) do nothing`;
+    console.log("ontology seeded into Postgres (factory_* tables)");
+  }
+}
+
+let syncTimer = null;
+function scheduleSync() {
+  if (STATE_FILE) {
+    try { fs.writeFileSync(STATE_FILE, JSON.stringify(state)); } catch (err) { console.error("state save failed:", err); }
+  }
+  if (!db || syncTimer) return;
+  syncTimer = setTimeout(() => {
+    syncTimer = null;
+    syncDb().catch((err) => console.error("postgres sync failed:", err));
+  }, 500);
+}
+
+async function syncDb() {
+  if (!db) return;
+  await db.begin(async (tx) => {
+    for (const [table, key, idField] of ENTITY_TABLES) {
+      await tx`delete from ${tx(table)}`;
+      for (const row of state[key]) {
+        await tx`insert into ${tx(table)} (id, data) values (${String(row[idField])}, ${tx.json(row)})`;
+      }
+    }
+    for (const [key, value] of [["nextOrderSeq", state.nextOrderSeq], ["nextJobSeq", state.nextJobSeq]]) {
+      await tx`insert into factory_meta (key, value) values (${key}, ${tx.json(value)}) on conflict (key) do update set value = excluded.value`;
+    }
+  });
+}
+
 function logEvent(kind, message, data = {}) {
-  state.events.unshift({ at: new Date().toISOString(), kind, message, ...data });
+  const event = { at: new Date().toISOString(), kind, message, ...data };
+  state.events.unshift(event);
   state.events.length = Math.min(state.events.length, 200);
   console.log(`[event] ${kind}: ${message}`);
+  if (db) {
+    db`insert into factory_events (data) values (${db.json(event)})`
+      .catch((err) => console.error("event insert failed:", err));
+  }
+  scheduleSync();
 }
 
 // ── Paperclip push (fault/shortage → issue, auto-assigned to Director) ──────
@@ -132,6 +247,59 @@ function raiseFault(machine, code, label, deps) {
   }, deps);
 }
 
+// ── Order intake (the "customer/OEM broadcast" entry point) ─────────────────
+// Expedited orders become a hot-job Paperclip task assigned to the Director.
+// This is the demand-intake integration service — deliberately not an agent.
+async function createOrder({ product, qty, due, customer, expedite }, deps = { fetch }) {
+  const productRow = state.products.find((p) => p.id === product);
+  if (!productRow) throw new Error(`unknown product "${product}" (see /products)`);
+  if (!Number.isFinite(qty) || qty <= 0) throw new Error("qty must be a positive number");
+  if (!due) throw new Error("due date required (YYYY-MM-DD)");
+
+  const order = {
+    id: `SO-${state.nextOrderSeq++}`,
+    product,
+    customer: customer ?? "Unknown customer",
+    qty,
+    produced: 0,
+    due,
+    expedite: Boolean(expedite),
+    status: "queued",
+    line: null,
+  };
+  state.orders.push(order);
+  logEvent("order_received", `${order.id}: ${qty}x ${productRow.name} due ${due}${order.expedite ? " (EXPEDITED)" : ""}`, { orderId: order.id });
+
+  if (order.expedite) {
+    await pushIssue({
+      title: `[HOT JOB] Expedited order ${order.id} — ${qty}x ${productRow.name} due ${due}`,
+      priority: "critical",
+      sourceRef: `sim://order/${order.id}/expedite`,
+      body: [
+        `Expedited customer order received by the factory gateway. Insert it into the current schedule without breaking existing commitments.`,
+        ``,
+        `Order: ${JSON.stringify(order)}`,
+        `BOM: ${JSON.stringify(productRow.bom)}`,
+        ``,
+        `Validate before scheduling (query live state, quote evidence):`,
+        `- GET ${PUBLIC_URL}/orders — current order book and progress`,
+        `- GET ${PUBLIC_URL}/products — BOM for ${productRow.name}`,
+        `- GET ${PUBLIC_URL}/inventory — material availability vs reservations`,
+        `- GET ${PUBLIC_URL}/lines — line capability and rate`,
+        `- GET ${PUBLIC_URL}/machines — line health right now`,
+        `- GET ${PUBLIC_URL}/jobs — already-planned schedule entries`,
+        ``,
+        `Bounded writes (only after validation and required approvals):`,
+        `- POST ${PUBLIC_URL}/inventory/:sku/reserve {"qty": n, "orderId": "${order.id}"}`,
+        `- POST ${PUBLIC_URL}/jobs {"orderId": "${order.id}", "lineId": "...", "plannedStart": "...", "plannedEnd": "...", "note": "..."}`,
+        ``,
+        `Schedule changes affecting existing due-date commitments need board approval per governance.`,
+      ].join("\n"),
+    }, deps);
+  }
+  return order;
+}
+
 // ── Sim tick ─────────────────────────────────────────────────────────────────
 async function tick(deps = { fetch, random: Math.random }) {
   for (const machine of state.machines) {
@@ -177,6 +345,8 @@ async function tick(deps = { fetch, random: Math.random }) {
       await raiseFault(machine, code, label, deps);
     }
   }
+  // Production counters mutate without emitting events; persist them too.
+  scheduleSync();
 }
 
 // ── Read/act API ─────────────────────────────────────────────────────────────
@@ -185,7 +355,26 @@ function json(res, status, body) {
   res.end(JSON.stringify(body, null, 2));
 }
 
-function serve() {
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    req.on("data", (chunk) => {
+      data += chunk;
+      if (data.length > 1_000_000) req.destroy();
+    });
+    req.on("end", () => {
+      try {
+        resolve(data ? JSON.parse(data) : {});
+      } catch {
+        reject(new Error("body must be valid JSON"));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+async function serve() {
+  await initDb();
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://x`);
     const parts = url.pathname.split("/").filter(Boolean);
@@ -194,7 +383,15 @@ function serve() {
         return json(res, 200, {
           service: "factory-gateway",
           autoEvents,
-          endpoints: ["GET /machines", "GET /machines/:id", "GET /orders", "GET /inventory", "GET /events", "POST /sim/start", "POST /sim/stop", "POST /machines/:id/repair", "POST /machines/:id/fault"],
+          endpoints: [
+            "GET /machines", "GET /machines/:id", "GET /orders", "GET /orders/:id",
+            "GET /products", "GET /lines", "GET /jobs", "GET /inventory", "GET /events",
+            "POST /orders {product, qty, due, customer?, expedite?}",
+            "POST /jobs {orderId, lineId, plannedStart, plannedEnd, note?}",
+            "POST /inventory/:sku/reserve {qty, orderId?}",
+            "POST /machines/:id/repair", "POST /machines/:id/fault",
+            "POST /sim/start", "POST /sim/stop",
+          ],
         });
       }
       if (req.method === "POST" && parts[0] === "sim" && (parts[1] === "start" || parts[1] === "stop")) {
@@ -207,9 +404,63 @@ function serve() {
         const machine = state.machines.find((m) => m.id === parts[1]);
         return machine ? json(res, 200, machine) : json(res, 404, { error: "machine not found" });
       }
+      if (req.method === "GET" && parts[0] === "orders" && parts[1]) {
+        const order = state.orders.find((o) => o.id === parts[1]);
+        return order ? json(res, 200, order) : json(res, 404, { error: "order not found" });
+      }
       if (req.method === "GET" && parts[0] === "orders") return json(res, 200, state.orders);
+      if (req.method === "GET" && parts[0] === "products") return json(res, 200, state.products);
+      if (req.method === "GET" && parts[0] === "lines") return json(res, 200, state.lines);
+      if (req.method === "GET" && parts[0] === "jobs") return json(res, 200, state.jobs);
       if (req.method === "GET" && parts[0] === "inventory") return json(res, 200, state.inventory);
       if (req.method === "GET" && parts[0] === "events") return json(res, 200, state.events.slice(0, 50));
+
+      if (req.method === "POST" && parts[0] === "orders") {
+        try {
+          const order = await createOrder(await readBody(req));
+          return json(res, 201, order);
+        } catch (err) {
+          return json(res, 422, { error: String(err.message ?? err) });
+        }
+      }
+      if (req.method === "POST" && parts[0] === "jobs") {
+        const body = await readBody(req).catch(() => null);
+        if (!body) return json(res, 422, { error: "body must be valid JSON" });
+        const order = state.orders.find((o) => o.id === body.orderId);
+        const line = state.lines.find((l) => l.id === body.lineId);
+        if (!order) return json(res, 422, { error: `unknown orderId "${body.orderId}"` });
+        if (!line) return json(res, 422, { error: `unknown lineId "${body.lineId}" (see /lines)` });
+        if (!line.products.includes(order.product)) {
+          return json(res, 422, { error: `line ${line.id} cannot produce ${order.product}` });
+        }
+        const job = {
+          id: `JOB-${state.nextJobSeq++}`,
+          orderId: order.id,
+          lineId: line.id,
+          plannedStart: body.plannedStart ?? null,
+          plannedEnd: body.plannedEnd ?? null,
+          note: body.note ?? null,
+          status: "planned",
+          createdAt: new Date().toISOString(),
+        };
+        state.jobs.push(job);
+        logEvent("job_planned", `${job.id}: ${order.id} on ${line.id} (${job.plannedStart ?? "unscheduled"} → ${job.plannedEnd ?? "?"})`, { jobId: job.id, orderId: order.id });
+        return json(res, 201, job);
+      }
+      if (req.method === "POST" && parts[0] === "inventory" && parts[2] === "reserve") {
+        const item = state.inventory.find((i) => i.sku === parts[1]);
+        if (!item) return json(res, 404, { error: "sku not found" });
+        const body = await readBody(req).catch(() => null);
+        const qty = Number(body?.qty);
+        if (!Number.isFinite(qty) || qty <= 0) return json(res, 422, { error: "qty must be a positive number" });
+        const available = item.qty - item.reserved;
+        if (qty > available) {
+          return json(res, 422, { error: `insufficient stock: ${available} available (${item.qty} on hand − ${item.reserved} reserved)` });
+        }
+        item.reserved += qty;
+        logEvent("inventory_reserved", `${qty}x ${item.sku} reserved${body?.orderId ? ` for ${body.orderId}` : ""}`, { sku: item.sku, qty });
+        return json(res, 200, item);
+      }
 
       if (req.method === "POST" && parts[0] === "machines" && parts[2] === "repair") {
         const machine = state.machines.find((m) => m.id === parts[1]);
@@ -238,6 +489,7 @@ function serve() {
   server.listen(PORT, () => {
     console.log(`factory-gateway listening on :${PORT} (tick ${TICK_MS}ms, fault prob ${FAULT_PROB}, auto events ${autoEvents ? "ON" : "OFF — POST /sim/start to begin demo"})`);
     console.log(`pushing events to ${TOKEN && COMPANY_ID ? `${BASE} company ${COMPANY_ID}` : "(disabled — set PAPERCLIP_TOKEN + COMPANY_ID)"}`);
+    console.log(`ontology storage: ${db ? "Postgres (factory_* tables)" : STATE_FILE ? `JSON snapshot ${STATE_FILE}` : "memory only (set FACTORY_DATABASE_URL for Postgres)"}`);
   });
   setInterval(() => void tick().catch((err) => console.error("tick failed:", err)), TICK_MS);
 }
@@ -306,10 +558,27 @@ async function check() {
   // repair path
   pkg.status = "running"; pkg.faultCode = null;
   assert.equal(pkg.status, "running");
+  // expedited order intake → hot-job push with ontology pointers
+  calls.length = 0;
+  const order = await createOrder(
+    { product: "widget-b", qty: 120, due: "2026-08-01", customer: "OEM South", expedite: true },
+    { fetch: fakeFetch },
+  );
+  assert.ok(order.id.startsWith("SO-"));
+  assert.equal(state.orders.at(-1).id, order.id);
+  if (TOKEN && COMPANY_ID) {
+    assert.ok(calls[0].body.title.includes(order.id));
+    assert.ok(calls[0].body.body.includes("/inventory"));
+  }
+  await assert.rejects(() => createOrder({ product: "nope", qty: 1, due: "2026-08-01" }, { fetch: fakeFetch }));
+  // reservation math
+  const cartons = state.inventory.find((i) => i.sku === "CARTONS");
+  cartons.reserved = cartons.qty - 5;
+  assert.ok(cartons.qty - cartons.reserved === 5);
   console.log("self-check ok");
 }
 
 const mode = process.argv[2];
 if (mode === "--check") await check();
 else if (mode === "install-skill") await installSkill();
-else serve();
+else await serve();
