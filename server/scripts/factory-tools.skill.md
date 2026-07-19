@@ -16,6 +16,8 @@ Base URL: `__GATEWAY_URL__` (a fault issue's body may also state the URL; prefer
 
 All reads are plain HTTP GET returning JSON. Use curl.
 
+If the gateway is deployed with auth (responses say `unauthorized`), add `-H "Authorization: Bearer $FACTORY_GATEWAY_KEY"` to every call — the key is provided in your environment as `FACTORY_GATEWAY_KEY`.
+
 ## Endpoints
 
 | Purpose | Call |

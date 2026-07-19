@@ -17,6 +17,7 @@
 //   DIRECTOR_AGENT_ID    if set, new fault issues are auto-assigned to it
 //   GATEWAY_PUBLIC_URL   URL agents should use to reach this gateway (goes in issue bodies)
 //   CONNECTOR_ORDERS_FILE  order export file (.csv or .json) ingested read-only when it changes
+//   GATEWAY_UI_TOKEN     if set, every request must carry it (?key= or Authorization: Bearer)
 //   FACTORY_DATABASE_URL Postgres for the ontology tables (falls back to DATABASE_URL)
 //   FACTORY_STATE_FILE   JSON snapshot path (local alternative to Postgres)
 //   PORT                 gateway port (default 8090)
@@ -35,6 +36,7 @@ const TOKEN = process.env.PAPERCLIP_TOKEN;
 const COMPANY_ID = process.env.COMPANY_ID;
 const DIRECTOR_AGENT_ID = process.env.DIRECTOR_AGENT_ID;
 const PUBLIC_URL = process.env.GATEWAY_PUBLIC_URL ?? `http://localhost:${PORT}`;
+const UI_TOKEN = process.env.GATEWAY_UI_TOKEN;
 
 // Demo switch: random fault/shortage events (each one wakes agents = spends
 // tokens) are OFF until started. Manual POST /machines/:id/fault always works.
@@ -214,6 +216,56 @@ async function pushIssue({ title, body, priority, sourceRef }, deps = { fetch })
     });
     logEvent("issue_assigned", `${json.issue.identifier} → Director`);
   }
+}
+
+// ── Paperclip proxy (customer-facing panels — Paperclip stays backstage) ────
+// The control room shows the agents' response and handles approvals through
+// these routes. The gateway holds the board token, so the browser never talks
+// to (or reveals) the Paperclip instance.
+let agentCache = { at: 0, map: {} };
+
+async function pc(method, path, body) {
+  const res = await fetch(`${BASE}/api${path}`, {
+    method,
+    headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const out = await res.json().catch(() => ({}));
+  if (res.status >= 300) throw new Error(`paperclip ${res.status}: ${JSON.stringify(out)}`);
+  return out;
+}
+
+async function agentNames() {
+  if (Date.now() - agentCache.at > 60_000) {
+    const out = await pc("GET", `/companies/${COMPANY_ID}/agents`);
+    agentCache = { at: Date.now(), map: Object.fromEntries((out.agents ?? out).map((a) => [a.id, a.name])) };
+  }
+  return agentCache.map;
+}
+
+// One chronological feed of the whole task tree: task creations + comments.
+// ponytail: N+1 comment fetches per refresh; fine for demo-sized trees.
+async function responseLog(issueId) {
+  const [tree, names] = await Promise.all([
+    pc("GET", `/companies/${COMPANY_ID}/issues?descendantOf=${encodeURIComponent(issueId)}`),
+    agentNames(),
+  ]);
+  const entries = [];
+  for (const issue of tree) {
+    entries.push({ at: issue.createdAt, task: issue.identifier ?? issue.id.slice(0, 8), kind: "created", author: null, body: issue.title, status: issue.status });
+    for (const comment of await pc("GET", `/issues/${issue.id}/comments?order=asc`)) {
+      if (comment.deletedAt) continue;
+      const agentId = comment.authorAgentId ?? comment.derivedAuthorAgentId;
+      entries.push({
+        at: comment.createdAt,
+        task: issue.identifier ?? issue.id.slice(0, 8),
+        kind: "comment",
+        author: agentId ? (names[agentId] ?? "Agent") : comment.authorUserId ? "Board" : "System",
+        body: comment.body,
+      });
+    }
+  }
+  return entries.sort((a, b) => new Date(a.at) - new Date(b.at));
 }
 
 function machineSnapshot(machine) {
@@ -520,6 +572,14 @@ async function serve() {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://x`);
     const parts = url.pathname.split("/").filter(Boolean);
+    // Shared-secret gate for internet-facing deploys. The control room carries
+    // the key from its own URL (?key=) on every fetch, so an iframe embed just
+    // needs the key once in its src. Unset = open (local dev).
+    if (UI_TOKEN) {
+      const authed = url.searchParams.get("key") === UI_TOKEN ||
+        req.headers.authorization === `Bearer ${UI_TOKEN}`;
+      if (!authed) return json(res, 401, { error: "unauthorized: pass ?key= or Authorization: Bearer <GATEWAY_UI_TOKEN>" });
+    }
     try {
       if (req.method === "GET" && parts.length === 0) {
         return json(res, 200, {
@@ -535,6 +595,8 @@ async function serve() {
             "POST /inventory/:sku/reserve {qty, orderId?}",
             "POST /machines/:id/repair", "POST /machines/:id/fault",
             "POST /sim/start", "POST /sim/stop",
+            "GET /response/incidents", "GET /response/log/:issueId",
+            "GET /approvals", "POST /approvals/:id/approve|reject",
           ],
         });
       }
@@ -563,6 +625,42 @@ async function serve() {
       if (req.method === "GET" && parts[0] === "inventory") return json(res, 200, state.inventory);
       if (req.method === "GET" && parts[0] === "events") return json(res, 200, state.events.slice(0, 50));
 
+      if (parts[0] === "response" && req.method === "GET") {
+        if (!TOKEN || !COMPANY_ID) return json(res, 200, { configured: false, incidents: [], entries: [] });
+        if (parts[1] === "incidents") {
+          const incidents = state.events
+            .filter((e) => e.kind === "issue_created" && e.issueId)
+            .map((e) => ({ issueId: e.issueId, at: e.at, title: e.message }));
+          return json(res, 200, { configured: true, incidents });
+        }
+        if (parts[1] === "log" && parts[2]) {
+          return json(res, 200, { configured: true, entries: await responseLog(parts[2]) });
+        }
+      }
+      if (parts[0] === "approvals") {
+        if (!TOKEN || !COMPANY_ID) return json(res, 200, { configured: false, approvals: [] });
+        if (req.method === "GET" && !parts[1]) {
+          const [approvals, names] = await Promise.all([
+            pc("GET", `/companies/${COMPANY_ID}/approvals?status=pending`),
+            agentNames(),
+          ]);
+          return json(res, 200, {
+            configured: true,
+            approvals: approvals.map((a) => ({
+              id: a.id, type: a.type, at: a.createdAt, payload: a.payload,
+              requestedBy: a.requestedByAgentId ? (names[a.requestedByAgentId] ?? "Agent") : "Board",
+            })),
+          });
+        }
+        if (req.method === "POST" && parts[1] && (parts[2] === "approve" || parts[2] === "reject")) {
+          const body = await readBody(req).catch(() => ({}));
+          const out = await pc("POST", `/approvals/${parts[1]}/${parts[2]}`, {
+            decisionNote: body.note ?? `${parts[2]}d via NomosAgents control room`,
+          });
+          logEvent("approval", `approval ${parts[1].slice(0, 8)}… ${parts[2]}d from control room`);
+          return json(res, 200, out);
+        }
+      }
       if (req.method === "POST" && parts[0] === "schedule" && parts[1] === "solve") {
         return json(res, 200, solveSchedule());
       }
@@ -641,7 +739,7 @@ async function serve() {
     console.log(`factory-gateway listening on :${PORT} (tick ${TICK_MS}ms, fault prob ${FAULT_PROB}, auto events ${autoEvents ? "ON" : "OFF — POST /sim/start to begin demo"})`);
     console.log(`pushing events to ${TOKEN && COMPANY_ID ? `${BASE} company ${COMPANY_ID}` : "(disabled — set PAPERCLIP_TOKEN + COMPANY_ID)"}`);
     console.log(`ontology storage: ${db ? "Postgres (factory_* tables)" : STATE_FILE ? `JSON snapshot ${STATE_FILE}` : "memory only (set FACTORY_DATABASE_URL for Postgres)"}`);
-    console.log(`control room: ${PUBLIC_URL}/ui`);
+    console.log(`control room: ${PUBLIC_URL}/ui${UI_TOKEN ? "?key=<GATEWAY_UI_TOKEN> (auth required)" : " (open — set GATEWAY_UI_TOKEN before exposing to the internet)"}`);
     if (ORDERS_FILE) console.log(`orders connector: watching ${ORDERS_FILE} (read-only)`);
   });
   setInterval(() => void tick().catch((err) => console.error("tick failed:", err)), TICK_MS);
@@ -751,6 +849,30 @@ async function check() {
   assert.equal(state.orders.filter((o) => o.id === "SO-9001").length, 1);
   ingest = await ingestOrders([{ id: "SO-9002", product: "nope", qty: "5", due: "2026-08-05" }], { fetch: fakeFetch });
   assert.deepEqual(ingest, { added: 0, updated: 0, skipped: 1 });
+  // response-log merge: tree + comments interleaved chronologically
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => ({
+    status: 200,
+    json: async () => {
+      if (url.includes("/agents")) return [{ id: "ag1", name: "Director" }];
+      if (url.includes("descendantOf")) {
+        return [
+          { id: "i1", identifier: "AUT-1", title: "Fault", createdAt: "2026-07-19T10:00:00Z", status: "in_progress" },
+          { id: "i2", identifier: "AUT-2", title: "Diagnose", createdAt: "2026-07-19T10:05:00Z", status: "todo" },
+        ];
+      }
+      if (url.includes("/issues/i1/comments")) return [{ id: "c1", authorAgentId: "ag1", body: "delegating", createdAt: "2026-07-19T10:06:00Z" }];
+      return [];
+    },
+  });
+  try {
+    const log = await responseLog("i1");
+    assert.deepEqual(log.map((e) => [e.kind, e.task, e.author]), [
+      ["created", "AUT-1", null], ["created", "AUT-2", null], ["comment", "AUT-1", "Director"],
+    ]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
   console.log("self-check ok");
 }
 

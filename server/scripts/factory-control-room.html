@@ -28,10 +28,18 @@
   .bar { height:5px; background:var(--line); margin-top:5px; min-width:90px } .bar i { display:block; height:100%; background:var(--cyan) }
   .badge { font-size:10px; padding:1px 6px; border:1px solid currentColor; margin-left:6px }
   .amber { color:var(--amber) } .red { color:var(--red) } .green { color:var(--green) } .dim { color:var(--dim) }
+  input, select { background:var(--bg); color:var(--text); border:1px solid var(--line); padding:5px 8px; font:inherit; font-size:13px }
+  input:focus, select:focus { outline:none; border-color:var(--cyan) }
+  form { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px }
   #events { list-style:none; font-size:12px; max-height:300px; overflow-y:auto }
   #events li { padding:3px 0; border-bottom:1px solid var(--line) }
   #plan:empty { display:none }
   .zap { padding:2px 8px; font-size:12px }
+  .chip { font-family:ui-monospace,monospace; font-size:10px; border:1px solid var(--line); padding:1px 5px; color:var(--dim) }
+  .card { border:1px solid var(--line); background:var(--bg); padding:10px; margin:6px 0 }
+  button.approve { border-color:var(--green); color:var(--green) }
+  button.reject { border-color:var(--red); color:var(--red) }
+  pre.payload { max-height:120px; overflow:auto; font-size:11px; color:var(--dim); white-space:pre-wrap }
 </style>
 
 <header>
@@ -46,8 +54,28 @@
 <div class="grid">
   <section><h2>Machines</h2><table id="machines"></table></section>
   <section><h2>Inventory</h2><table id="inventory"></table></section>
-  <section class="wide"><h2>Orders</h2><table id="orders"></table></section>
+  <section class="wide"><h2>Orders</h2>
+    <form id="orderForm">
+      <select id="of-product"></select>
+      <input id="of-qty" type="number" min="1" placeholder="qty" required style="width:80px">
+      <input id="of-due" type="date" required>
+      <input id="of-customer" placeholder="customer" style="width:150px">
+      <label style="display:flex;gap:5px;align-items:center"><input id="of-hot" type="checkbox"> <span class="amber">HOT (expedite)</span></label>
+      <button>Create order</button>
+      <span id="of-err" class="red"></span>
+    </form>
+    <table id="orders"></table>
+  </section>
   <section class="wide" id="plan"></section>
+  <section class="wide" id="responseSec" hidden>
+    <h2>Agent response</h2>
+    <form style="margin-bottom:10px" onsubmit="return false">
+      <select id="incidentSel"></select>
+      <button id="logRefresh" type="button">Refresh</button>
+    </form>
+    <div id="responseLog"></div>
+  </section>
+  <section id="approvalsSec" hidden><h2>Pending approvals</h2><div id="approvals"></div></section>
   <section><h2>Planned jobs</h2><table id="jobs"></table></section>
   <section><h2>Events</h2><ul id="events"></ul></section>
 </div>
@@ -55,7 +83,11 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const j = async (path, opts) => (await fetch(path, opts)).json();
+// Gateways with GATEWAY_UI_TOKEN set require the key on every request; carry
+// it forward from this page's own URL (?key=...).
+const KEY = new URLSearchParams(location.search).get("key");
+const withKey = (path) => (KEY ? `${path}${path.includes("?") ? "&" : "?"}key=${encodeURIComponent(KEY)}` : path);
+const j = async (path, opts) => (await fetch(withKey(path), opts)).json();
 const t = (iso) => (iso ? esc(String(iso).slice(5, 16).replace("T", " ")) : "—");
 let simOn = false;
 
@@ -127,7 +159,85 @@ $("solveBtn").onclick = async () => {
         r.conflicts.map((c) => `<li class="amber">&#9888; ${esc(JSON.stringify(c))}</li>`).join("") + "</ul>");
 };
 
+j("/products").then((ps) => {
+  $("of-product").innerHTML = ps.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("");
+});
+
+$("orderForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const res = await fetch(withKey("/orders"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      product: $("of-product").value,
+      qty: Number($("of-qty").value),
+      due: $("of-due").value,
+      customer: $("of-customer").value || undefined,
+      expedite: $("of-hot").checked,
+    }),
+  });
+  const out = await res.json();
+  $("of-err").textContent = res.ok ? "" : out.error;
+  if (res.ok) { e.target.reset(); refresh(); }
+};
+
+// ── Agent response + approvals (proxied through the gateway; Paperclip stays
+// backstage). Panels appear only when the gateway is connected to Paperclip.
+let currentIncident = null;
+
+async function refreshIncidents() {
+  try {
+    const r = await j("/response/incidents");
+    if (!r.configured || r.incidents.length === 0) return;
+    $("responseSec").hidden = false;
+    const sel = $("incidentSel");
+    const prev = sel.value;
+    sel.innerHTML = r.incidents.map((i) => `<option value="${esc(i.issueId)}">${esc(i.title)}</option>`).join("");
+    if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
+    if (!currentIncident) refreshLog();
+  } catch {}
+}
+
+async function refreshLog() {
+  currentIncident = $("incidentSel").value;
+  if (!currentIncident) return;
+  const r = await j(`/response/log/${currentIncident}`);
+  $("responseLog").innerHTML = (r.entries ?? []).map((e) => e.kind === "created"
+    ? `<div class="dim" style="padding:4px 0;font-size:12px"><span class="chip">${esc(e.task)}</span> Task created: <span style="color:var(--text)">${esc(e.body)}</span></div>`
+    : `<div class="card"><div style="margin-bottom:4px"><b>${esc(e.author)}</b> <span class="chip">${esc(e.task)}</span> <span class="dim" style="float:right">${t(e.at)}</span></div><div style="white-space:pre-wrap;font-size:13px">${esc(e.body)}</div></div>`,
+  ).join("") || '<span class="dim">no activity yet</span>';
+}
+
+async function refreshApprovals() {
+  try {
+    const r = await j("/approvals");
+    if (!r.configured) return;
+    $("approvalsSec").hidden = false;
+    $("approvals").innerHTML = r.approvals.length === 0 ? '<span class="dim">none pending</span>'
+      : r.approvals.map((a) => `<div class="card">
+          <div style="margin-bottom:4px"><b>${esc(a.type)}</b> <span class="dim">requested by ${esc(a.requestedBy)}</span> <span class="dim" style="float:right">${t(a.at)}</span></div>
+          <pre class="payload">${esc(JSON.stringify(a.payload, null, 1))}</pre>
+          <div style="display:flex;gap:8px;margin-top:6px">
+            <button class="approve" onclick="decide('${esc(a.id)}','approve')">Approve</button>
+            <button class="reject" onclick="decide('${esc(a.id)}','reject')">Reject</button>
+          </div>
+        </div>`).join("");
+  } catch {}
+}
+
+window.decide = async (id, verb) => {
+  await fetch(withKey(`/approvals/${id}/${verb}`), { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  refreshApprovals();
+  refreshLog();
+};
+
+$("incidentSel").onchange = refreshLog;
+$("logRefresh").onclick = refreshLog;
+
 refresh();
+refreshIncidents();
+refreshApprovals();
 setInterval(refresh, 3000);
+setInterval(() => { refreshIncidents(); refreshApprovals(); }, 15000);
 </script>
 </html>
